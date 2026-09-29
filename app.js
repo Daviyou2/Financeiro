@@ -387,6 +387,83 @@ async function salvarLancamentoSupabase(t) {
   return data;
 }
 
+async function atualizarLancamentoSupabase(t) {
+  if (!t.id) {
+    throw new Error("Lançamento sem ID.");
+  }
+
+  const registro = {
+    tipo:
+      t.type === "in"
+        ? "entrada"
+        : "saida",
+
+    categoria:
+      t.cat || "Outros",
+
+    descricao:
+      t.desc || "",
+
+    valor:
+      Number(t.value) || 0,
+
+    data:
+      t.date,
+
+    pago:
+      !!t.done,
+
+    quem:
+      t.by || "",
+
+    forma_pagamento:
+      t.pay || "",
+
+    classificacao:
+      t.cls === "casal"
+        ? "casal"
+        : t.cls === "protegido"
+          ? "protegido"
+          : "normal",
+
+    tipo_lancamento:
+      t.kind === "entrada"
+        ? "entrada"
+        : t.kind === "fixa"
+          ? "fixa"
+          : t.kind === "recorrente"
+            ? "recorrente"
+            : "avulso",
+
+    recorrente:
+      !!t.recurrenceId,
+
+    recorrencia_id:
+      t.recurrenceId || null,
+
+    recorrencia_indice:
+      Number.isInteger(t.recurrenceIndex)
+        ? t.recurrenceIndex
+        : null
+  };
+
+  const { error } =
+    await supabaseClient
+      .from("lancamentos")
+      .update(registro)
+      .eq("id", t.id)
+      .eq("controle_id", window.controleId);
+
+  if (error) {
+    console.error(
+      "Erro ao atualizar lançamento:",
+      error
+    );
+
+    throw error;
+  }
+}
+
 async function carregarLancamentosSupabase() {
   if (!window.controleId) {
     tx = [];
@@ -1808,38 +1885,53 @@ function render() {
 
       /* ---------- Edição ---------- */
 
-      if (editId) {
-        const item =
-          tx.find(t => t.id === editId);
+    if (editId) {
+      const item =
+        tx.find(t => t.id === editId);
 
-        if (item) {
-          const { who: _who, ...rest } = base;
+      if (item) {
 
-          Object.assign(item, rest);
+        Object.assign(
+          item,
+          base
+        );
 
-          if (!item.done) {
-            item.doneAt = null;
-          } else if (!item.doneAt && item.date > today()) {
-            item.doneAt = today();
-          }
+        /*
+        * Mantém o fato de ser uma
+        * recorrência antiga.
+        */
+        item.fixed =
+          item.fixed || false;
 
-          /*
-           * Mantém o fato de ser uma
-           * recorrência antiga.
-           */
-          item.fixed =
-            item.fixed || false;
+        try {
+
+          await atualizarLancamentoSupabase(
+            item
+          );
+
+        } catch (erro) {
+
+          console.error(
+            "Erro ao atualizar lançamento:",
+            erro
+          );
+
+          alert(
+            "Não foi possível salvar a alteração no Supabase."
+          );
+
+          return;
         }
-
-        editId = null;
-        showForm = false;
-
-        save();
-        render();
-
-        return;
       }
 
+      editId = null;
+      showForm = false;
+
+      save();
+      render();
+
+      return;
+    }
 
       /* ---------- Novo lançamento ---------- */
 
@@ -1911,10 +2003,18 @@ function render() {
 
         for (const lancamento of novosLancamentos) {
 
-          await salvarLancamentoSupabase(
-            lancamento
-          );
+          const salvo =
+            await salvarLancamentoSupabase(
+              lancamento
+            );
 
+          /*
+          * O Supabase gera o UUID.
+          * Usamos esse ID no tx também.
+          */
+          if (salvo?.id) {
+            lancamento.id = salvo.id;
+          }
         }
 
       } catch (erro) {
