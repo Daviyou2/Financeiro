@@ -318,7 +318,7 @@ const save = () => {
   saveUi();
 };
 
-async function salvarLancamentoSupabase(t) {
+async function salvarLancamentoSupabase(t, manterId = false) {
   if (!window.controleId || !window.membroId) {
     throw new Error("Controle ou membro não identificado.");
   }
@@ -367,6 +367,10 @@ async function salvarLancamentoSupabase(t) {
         ? t.recurrenceIndex
         : null
   };
+
+  if (manterId && t.id) {
+    registro.id = t.id;
+  }
 
   const { data, error } =
     await supabaseClient
@@ -464,6 +468,33 @@ async function atualizarLancamentoSupabase(t) {
   }
 }
 
+async function excluirLancamentoSupabase(id) {
+  if (!id) {
+    throw new Error("Lançamento sem ID.");
+  }
+
+  const { data, error } =
+    await supabaseClient
+      .from("lancamentos")
+      .delete()
+      .eq("id", id)
+      .eq("controle_id", window.controleId)
+      .select("id");
+
+  if (error) {
+    console.error("Erro ao excluir lançamento:", error);
+    throw error;
+  }
+
+  /*
+   * Sem erro mas sem linha apagada = o banco
+   * bloqueou (permissão/RLS) ou o registro não existe.
+   */
+  if (!data || !data.length) {
+    throw new Error("Nenhum registro foi apagado no Supabase.");
+  }
+}
+
 async function atualizarStatusSupabase(t) {
 
   if (!t.id) {
@@ -474,7 +505,8 @@ async function atualizarStatusSupabase(t) {
     await supabaseClient
       .from("lancamentos")
       .update({
-        pago: !!t.doneAt
+        pago: !!t.doneAt,
+        valor: Number(t.value) || 0
       })
       .eq("id", t.id)
       .eq("controle_id", window.controleId);
@@ -2227,20 +2259,15 @@ function render() {
   document
     .querySelectorAll("[data-d]")
     .forEach(button => {
-      button.onclick = () => {
-        const index =
-          tx.findIndex(
-            t =>
-              t.id ===
-              button.dataset.d
+      button.onclick = async () => {
+        const item =
+          tx.find(
+            t => t.id === button.dataset.d
           );
 
-        if (index < 0) {
+        if (!item) {
           return;
         }
-
-        const item =
-          tx[index];
 
         const ok = confirm(
           `Excluir "${item.desc || item.cat}" no valor de ${R(item.value)}?`
@@ -2250,25 +2277,36 @@ function render() {
           return;
         }
 
-        tx.splice(
-          index,
-          1
-        );
+        /*
+         * Apaga primeiro no Supabase. Se falhar,
+         * o lançamento continua na tela.
+         */
+        try {
+          await excluirLancamentoSupabase(item.id);
+        } catch (erro) {
+          alert(
+            "Não foi possível excluir no Supabase. " +
+            "O lançamento foi mantido."
+          );
+
+          return;
+        }
+
+        const index =
+          tx.findIndex(t => t.id === item.id);
+
+        if (index >= 0) {
+          tx.splice(index, 1);
+        }
 
         undo.push({
           t: item,
-          i: index
+          i: Math.max(0, index)
         });
 
-        /*
-         * Mantém no máximo 20
-         * exclusões no histórico.
-         */
-        undo =
-          undo.slice(-20);
+        undo = undo.slice(-20);
 
         saveUndo();
-
         save();
         render();
 
@@ -2284,8 +2322,6 @@ function render() {
       };
     });
 
-
-  
 
   $("#lk").onclick = async () => {
     const ok = confirm(
@@ -2580,13 +2616,37 @@ async function reverter(id) {
   );
 }
 
-function doUndo() {
+async function doUndo() {
   const item =
     undo.pop();
 
   if (!item) {
     toast(
       "Nada para desfazer."
+    );
+
+    return;
+  }
+
+  /*
+   * Recria o lançamento no Supabase com o mesmo ID.
+   */
+  try {
+    await salvarLancamentoSupabase(
+      item.t,
+      true
+    );
+  } catch (erro) {
+    console.error(
+      "Erro ao restaurar lançamento:",
+      erro
+    );
+
+    undo.push(item);
+    saveUndo();
+
+    alert(
+      "Não foi possível restaurar no Supabase."
     );
 
     return;
@@ -2714,53 +2774,6 @@ addEventListener(
   }
 );
 
-async function carregarLancamentosSupabase() {
-  if (!window.controleId) {
-    tx = [];
-    return;
-  }
-
-  const { data, error } = await supabaseClient
-    .from("lancamentos")
-    .select("*")
-    .eq("controle_id", window.controleId)
-    .order("data", { ascending: true });
-
-  if (error) {
-    console.error("Erro ao carregar lançamentos:", error);
-    alert("Não foi possível carregar os lançamentos.");
-    return;
-  }
-
-  tx = (data || []).map(t => ({
-    id: t.id,
-
-    type: t.tipo === "entrada"
-      ? "in"
-      : "out",
-
-    kind: t.tipo_lancamento || "avulso",
-
-    desc: t.descricao || "",
-    value: Number(t.valor) || 0,
-
-    cat: t.categoria || "Outros",
-    by: t.quem || "",
-    pay: t.forma_pagamento || "",
-
-    cls: t.classificacao || "normal",
-
-    date: t.data,
-
-    done: !!t.pago,
-
-    fixed: !!t.recorrente,
-
-    who: t.quem || ""
-  }));
-
-  console.log("Lançamentos carregados:", tx.length);
-}
 
 /* =========================================================
    INICIALIZAÇÃO
