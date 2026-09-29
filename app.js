@@ -1,3 +1,13 @@
+const SUPABASE_URL = 'https://ckcoymukqncylnjpcrxq.supabase.co';
+const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_7l21hE8p5B1vrB3T5nO5lg_k7F4E1-k';
+
+const supabaseClient = window.supabase.createClient(
+  SUPABASE_URL,
+  SUPABASE_PUBLISHABLE_KEY
+);
+
+console.log('Supabase conectado:', supabaseClient);
+
 const CATS = [
   "Moradia",
   "Mercado",
@@ -304,37 +314,17 @@ const save = () => {
    ========================================================= */
 
 function ensureNames() {
-  if (
-    cfg.names[0] &&
-    cfg.names[1]
-  ) {
-    if (!cfg.me) {
-      cfg.me = cfg.names[0];
-      save();
-    }
-
-    return;
+  if (!Array.isArray(cfg.names)) {
+    cfg.names = ["Pessoa 1", "Pessoa 2"];
   }
 
-  const answer = prompt(
-    "Nome de vocês dois, separados por vírgula.\n\nExemplo: Ana, João"
-  );
+  if (!cfg.names[0]) cfg.names[0] = "Pessoa 1";
+  if (!cfg.names[1]) cfg.names[1] = "Pessoa 2";
 
-  const names = String(answer || "")
-    .split(",")
-    .map(s => s.trim())
-    .filter(Boolean);
-
-  cfg.names = [
-    names[0] || "Pessoa 1",
-    names[1] || "Pessoa 2"
-  ];
-
-  cfg.me = cfg.names[0];
-
-  save();
+  if (!cfg.me) {
+    cfg.me = cfg.names[0];
+  }
 }
-
 
 /* =========================================================
    CÁLCULOS
@@ -2367,4 +2357,408 @@ function start() {
 }
 
 
-start();
+// ===============================
+// AUTENTICAÇÃO SUPABASE
+// ===============================
+
+async function mostrarLogin() {
+  const app = document.getElementById("app");
+
+  app.innerHTML = `
+    <div class="lock">
+      <div class="card">
+        <h1>Nosso Controle Financeiro</h1>
+        <p class="note" style="margin-top:6px">
+          Entre na sua conta para acessar o controle.
+        </p>
+
+        <input
+          id="loginEmail"
+          type="email"
+          placeholder="Seu e-mail"
+          autocomplete="email"
+        >
+
+        <input
+          id="loginSenha"
+          type="password"
+          placeholder="Sua senha"
+          autocomplete="current-password"
+        >
+
+        <button id="btnEntrar" style="width:100%;margin-top:4px">
+          Entrar
+        </button>
+
+        <button
+          id="btnCriarConta"
+          class="g"
+          style="width:100%;margin-top:8px"
+        >
+          Criar conta
+        </button>
+
+        <div
+          id="loginMsg"
+          class="note"
+          style="margin-top:12px"
+        ></div>
+      </div>
+    </div>
+  `;
+
+  document.getElementById("btnEntrar").onclick = async () => {
+    const email = document.getElementById("loginEmail").value.trim();
+    const senha = document.getElementById("loginSenha").value;
+    const msg = document.getElementById("loginMsg");
+
+    if (!email || !senha) {
+      msg.textContent = "Preencha e-mail e senha.";
+      return;
+    }
+
+    msg.textContent = "Entrando...";
+
+    const { error } = await supabaseClient.auth.signInWithPassword({
+      email,
+      password: senha
+    });
+
+    if (error) {
+      msg.textContent = "Erro: " + error.message;
+      return;
+    }
+
+    msg.textContent = "Login realizado.";
+
+    await iniciarSistema();
+  };
+
+  document.getElementById("btnCriarConta").onclick = async () => {
+    const email = document.getElementById("loginEmail").value.trim();
+    const senha = document.getElementById("loginSenha").value;
+    const msg = document.getElementById("loginMsg");
+
+    if (!email || !senha) {
+      msg.textContent = "Preencha e-mail e senha para criar a conta.";
+      return;
+    }
+
+    if (senha.length < 6) {
+      msg.textContent = "A senha precisa ter pelo menos 6 caracteres.";
+      return;
+    }
+
+    msg.textContent = "Criando conta...";
+
+    const { data, error } = await supabaseClient.auth.signUp({
+      email,
+      password: senha
+    });
+
+    if (error) {
+      msg.textContent = "Erro: " + error.message;
+      return;
+    }
+
+    if (data.user && !data.session) {
+      msg.textContent =
+        "Conta criada! Verifique seu e-mail para confirmar a conta.";
+      return;
+    }
+
+    msg.textContent = "Conta criada com sucesso.";
+
+    await iniciarSistema();
+  };
+}
+
+
+// ===============================
+// INICIAR SISTEMA
+// ===============================
+
+async function iniciarSistema() {
+  const {
+    data: { session },
+    error
+  } = await supabaseClient.auth.getSession();
+
+  if (error) {
+    console.error(error);
+    mostrarLogin();
+    return;
+  }
+
+  if (!session) {
+    mostrarLogin();
+    return;
+  }
+
+  console.log("Usuário autenticado:", session.user.email);
+
+  // A partir daqui continua o sistema financeiro antigo.
+  // O próximo passo será substituir os dados do localStorage
+  // pelos dados do Supabase.
+
+  await verificarControle();
+}
+
+
+// ===============================
+// VERIFICAR LOGIN AO ABRIR
+// ===============================
+
+// ===============================
+// CONTROLE DO CASAL
+// ===============================
+
+async function verificarControle() {
+  const {
+    data: { user }
+  } = await supabaseClient.auth.getUser();
+
+  if (!user) {
+    mostrarLogin();
+    return;
+  }
+
+  const { data, error } = await supabaseClient
+    .from("membros")
+    .select(`
+      id,
+      nome,
+      email,
+      controle_id,
+      controles (
+        id,
+        nome,
+        codigo_convite
+      )
+    `)
+    .eq("usuario_auth_id", user.id)
+    .maybeSingle();
+
+  if (error) {
+    console.error(error);
+    alert("Erro ao verificar seu controle.");
+    return;
+  }
+
+  // Já pertence a um controle
+  if (data) {
+    window.controleId = data.controle_id;
+    window.membroId = data.id;
+    window.controleAtual = data.controles;
+
+    console.log("Controle encontrado:", data.controles);
+
+    start();
+    return;
+  }
+
+  // Ainda não pertence a nenhum controle
+  mostrarTelaControle();
+}
+
+
+// ===============================
+// TELA PARA CRIAR / ENTRAR
+// ===============================
+
+function mostrarTelaControle() {
+  const app = document.getElementById("app");
+
+  app.innerHTML = `
+    <div class="lock">
+      <div class="card">
+
+        <h1>Nosso Controle Financeiro</h1>
+
+        <p class="note" style="margin-top:6px">
+          Você ainda não está vinculado a um controle.
+        </p>
+
+        <button
+          id="btnCriarControle"
+          style="width:100%;margin-top:15px"
+        >
+          Criar novo controle
+        </button>
+
+        <button
+          id="btnEntrarControle"
+          class="g"
+          style="width:100%;margin-top:8px"
+        >
+          Entrar em um controle existente
+        </button>
+
+        <div
+          id="controleForm"
+          style="margin-top:14px"
+        ></div>
+
+        <div
+          id="controleMsg"
+          class="note"
+          style="margin-top:12px"
+        ></div>
+
+      </div>
+    </div>
+  `;
+
+  document.getElementById("btnCriarControle").onclick =
+    mostrarFormularioCriarControle;
+
+  document.getElementById("btnEntrarControle").onclick =
+    mostrarFormularioEntrarControle;
+}
+
+
+// ===============================
+// CRIAR CONTROLE
+// ===============================
+
+function mostrarFormularioCriarControle() {
+  const form = document.getElementById("controleForm");
+
+  form.innerHTML = `
+    <input
+      id="nomeControle"
+      placeholder="Nome do controle"
+      value="Nosso Controle"
+    >
+
+    <input
+      id="nomeMembro"
+      placeholder="Seu nome"
+      style="margin-top:8px"
+    >
+
+    <button
+      id="confirmarCriacao"
+      style="width:100%;margin-top:8px"
+    >
+      Criar
+    </button>
+  `;
+
+  document.getElementById("confirmarCriacao").onclick =
+    criarControle;
+}
+
+
+async function criarControle() {
+  const nomeControle =
+    document.getElementById("nomeControle").value.trim();
+
+  const nomeMembro =
+    document.getElementById("nomeMembro").value.trim();
+
+  const msg = document.getElementById("controleMsg");
+
+  if (!nomeControle || !nomeMembro) {
+    msg.textContent = "Preencha os dois campos.";
+    return;
+  }
+
+  msg.textContent = "Criando controle...";
+
+  const { data, error } = await supabaseClient.rpc(
+    "criar_controle",
+    {
+      p_nome: nomeControle,
+      p_nome_membro: nomeMembro
+    }
+  );
+
+  if (error) {
+    console.error(error);
+    msg.textContent = "Erro: " + error.message;
+    return;
+  }
+
+  window.controleId = data;
+
+  msg.textContent = "Controle criado!";
+
+  await verificarControle();
+}
+
+
+// ===============================
+// ENTRAR EM CONTROLE EXISTENTE
+// ===============================
+
+function mostrarFormularioEntrarControle() {
+  const form = document.getElementById("controleForm");
+
+  form.innerHTML = `
+    <input
+      id="codigoControle"
+      placeholder="Código do convite"
+      maxlength="8"
+      style="text-transform:uppercase"
+    >
+
+    <input
+      id="nomeMembro"
+      placeholder="Seu nome"
+      style="margin-top:8px"
+    >
+
+    <button
+      id="confirmarEntrada"
+      style="width:100%;margin-top:8px"
+    >
+      Entrar
+    </button>
+  `;
+
+  document.getElementById("confirmarEntrada").onclick =
+    entrarControle;
+}
+
+
+async function entrarControle() {
+  const codigo =
+    document.getElementById("codigoControle").value
+      .trim()
+      .toUpperCase();
+
+  const nome =
+    document.getElementById("nomeMembro").value.trim();
+
+  const msg = document.getElementById("controleMsg");
+
+  if (!codigo || !nome) {
+    msg.textContent = "Preencha o código e seu nome.";
+    return;
+  }
+
+  msg.textContent = "Entrando no controle...";
+
+  const { data, error } = await supabaseClient.rpc(
+    "entrar_controle",
+    {
+      p_codigo: codigo,
+      p_nome: nome
+    }
+  );
+
+  if (error) {
+    console.error(error);
+    msg.textContent = "Erro: " + error.message;
+    return;
+  }
+
+  window.controleId = data;
+
+  msg.textContent = "Controle encontrado!";
+
+  await verificarControle();
+}
+
+iniciarSistema();
