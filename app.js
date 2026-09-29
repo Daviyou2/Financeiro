@@ -200,7 +200,10 @@ const norm = t => {
     who: t.who || "",
 
     recurrenceId: t.recurrenceId || null,
-    recurrenceIndex: Number(t.recurrenceIndex) || 0
+    recurrenceIndex: Number(t.recurrenceIndex) || 0,
+
+    doneAt: t.done !== false ? (t.doneAt || null) : null,
+    planned: t.planned == null ? null : Number(t.planned)
   };
 };
 
@@ -315,6 +318,168 @@ const save = () => {
   saveUi();
 };
 
+async function salvarLancamentoSupabase(t) {
+  if (!window.controleId || !window.membroId) {
+    throw new Error("Controle ou membro não identificado.");
+  }
+
+  const registro = {
+    controle_id: window.controleId,
+    membro_id: window.membroId,
+
+    tipo: t.type === "in"
+      ? "entrada"
+      : "saida",
+
+    categoria: t.cat || "Outros",
+    descricao: t.desc || "",
+    valor: Number(t.value) || 0,
+    data: t.date,
+
+    pago: !!t.done,
+
+    quem: t.by || "",
+    forma_pagamento: t.pay || "",
+
+    classificacao:
+      t.cls === "casal"
+        ? "casal"
+        : t.cls === "protegido"
+          ? "protegido"
+          : "normal",
+
+    tipo_lancamento:
+      t.kind === "entrada"
+        ? "entrada"
+        : t.kind === "fixa"
+          ? "fixa"
+          : t.kind === "recorrente"
+            ? "recorrente"
+            : "avulso",
+
+    recorrente: !!t.recurrenceId,
+
+    recorrencia_id:
+      t.recurrenceId || null,
+
+    recorrencia_indice:
+      Number.isInteger(t.recurrenceIndex)
+        ? t.recurrenceIndex
+        : null
+  };
+
+  const { data, error } =
+    await supabaseClient
+      .from("lancamentos")
+      .insert(registro)
+      .select()
+      .single();
+
+  if (error) {
+    console.error(
+      "Erro ao salvar lançamento:",
+      error
+    );
+
+    throw error;
+  }
+
+  return data;
+}
+
+async function carregarLancamentosSupabase() {
+  if (!window.controleId) {
+    tx = [];
+    return;
+  }
+
+  const { data, error } = await supabaseClient
+    .from("lancamentos")
+    .select("*")
+    .eq("controle_id", window.controleId)
+    .order("data", { ascending: true });
+
+  if (error) {
+    console.error(
+      "Erro ao carregar lançamentos:",
+      error
+    );
+
+    alert(
+      "Não foi possível carregar os lançamentos."
+    );
+
+    return;
+  }
+
+  tx = (data || []).map(t => ({
+    id:
+      t.id,
+
+    type:
+      t.tipo === "entrada"
+        ? "in"
+        : "out",
+
+    kind:
+      t.tipo_lancamento ||
+      "avulso",
+
+    desc:
+      t.descricao ||
+      "",
+
+    value:
+      Number(t.valor) ||
+      0,
+
+    cat:
+      t.categoria ||
+      "Outros",
+
+    by:
+      t.quem ||
+      "",
+
+    pay:
+      t.forma_pagamento ||
+      "",
+
+    cls:
+      t.classificacao ||
+      "normal",
+
+    date:
+      t.data,
+
+    done:
+      !!t.pago,
+
+    fixed:
+      !!t.recorrente,
+
+    who:
+      t.quem ||
+      "",
+
+    recurrenceId:
+      t.recorrencia_id ||
+      null,
+
+    recurrenceIndex:
+      Number.isInteger(
+        t.recorrencia_indice
+      )
+        ? t.recorrencia_indice
+        : 0
+  }));
+
+  console.log(
+    "Lançamentos carregados do Supabase:",
+    tx.length
+  );
+}
+
 
 /* =========================================================
    NOMES
@@ -370,6 +535,10 @@ const ins = arr =>
  * Lançamentos futuros, mesmo que existam,
  * não entram no saldo atual.
  */
+/* Dia em que o dinheiro realmente saiu/entrou.
+   Pago hoje = hoje, mesmo que o vencimento seja em outra data. */
+const effDate = t => t.doneAt || t.date;
+
 const balNow = () => {
   const td = today();
 
@@ -378,7 +547,7 @@ const balNow = () => {
     tx
       .filter(t =>
         t.done &&
-        t.date <= td
+        effDate(t) <= td
       )
       .reduce(
         (s, t) => s + sg(t),
@@ -505,7 +674,7 @@ function flow(m) {
 
   const rows = tx
     .filter(t =>
-      (!t.done || t.date > td) &&
+      (!t.done || effDate(t) > td) &&
       t.date <= end
     )
     .sort((a, b) =>
@@ -978,6 +1147,8 @@ function render() {
       <p class="note">
         A previsão considera o saldo atual e os
         lançamentos futuros ainda pendentes.
+        O saldo atual sobe e desce sozinho quando você marca algo
+        como pago ou recebido, e o botão ↩️ desfaz.
         O orçamento do casal é uma regra separada
         e não aumenta automaticamente quando sobra dinheiro.
       </p>
@@ -1125,10 +1296,7 @@ function render() {
               </div>
 
 
-              ${t.done ? "" : `<button
-                data-ok="${esc(t.id)}"
-                title="${t.type === "in" ? "Marcar como recebido" : "Marcar como pago"}"
-              >✓</button>`}
+              ${payBtn(t)}
 
             </div>
 
@@ -1290,7 +1458,7 @@ function render() {
 
                     ${
                       t.done
-                        ? ""
+                        ? `<span class="tag">${t.type === "in" ? "✓ recebido" : "✓ pago"}</span>`
                         : `
                           <span class="tag">
                             pendente
@@ -1341,8 +1509,7 @@ function render() {
                     </b>
 
 
-                    <button
-                      data-e="${t.id}"
+                    ${payBtn(t)}<button data-e="${t.id}"
                       title="Editar"
                     >
                       ✏️
@@ -1570,7 +1737,7 @@ function render() {
   /* ---------- Adicionar / editar ---------- */
 
   if ($("#ad")) {
-    $("#ad").onclick = () => {
+    $("#ad").onclick = async () => {
       const value =
         parseFloat($("#va").value);
 
@@ -1650,6 +1817,12 @@ function render() {
 
           Object.assign(item, rest);
 
+          if (!item.done) {
+            item.doneAt = null;
+          } else if (!item.doneAt && item.date > today()) {
+            item.doneAt = today();
+          }
+
           /*
            * Mantém o fato de ser uma
            * recorrência antiga.
@@ -1689,8 +1862,11 @@ function render() {
           .slice(2, 7);
 
 
+      const novosLancamentos = [];
+
       for (let k = 0; k < total; k++) {
-        tx.push({
+
+        const novo = {
           id:
             groupId +
             "-" +
@@ -1704,13 +1880,6 @@ function render() {
               k
             ),
 
-          /*
-           * Apenas o primeiro mês
-           * fica pago/recebido.
-           *
-           * Os próximos ficam
-           * pendentes.
-           */
           done:
             k === 0
               ? base.done
@@ -1728,7 +1897,37 @@ function render() {
             repeat
               ? k
               : 0
-        });
+        };
+
+        tx.push(novo);
+
+        novosLancamentos.push(novo);
+      }
+
+
+      /* ---------- Salvar no Supabase ---------- */
+
+      try {
+
+        for (const lancamento of novosLancamentos) {
+
+          await salvarLancamentoSupabase(
+            lancamento
+          );
+
+        }
+
+      } catch (erro) {
+
+        console.error(
+          "Erro ao sincronizar com Supabase:",
+          erro
+        );
+
+        alert(
+          "O lançamento foi criado localmente, mas não foi possível sincronizar com o Supabase."
+        );
+
       }
 
       showForm = false;
@@ -1827,14 +2026,32 @@ function render() {
             return;
           }
 
+          if (t.planned == null) t.planned = t.value;
           t.value = v;
         }
 
         t.done = true;
+        t.doneAt = today();
+
+        setTimeout(() => toast(
+          (t.type === "in" ? "✓ Recebido" : "✓ Pago") +
+            " — saldo agora " + R(balNow()),
+          "Desfazer",
+          () => reverter(t.id)
+        ), 0);
 
         save();
         render();
       };
+    });
+
+
+  /* ---------- Reverter pago/recebido ---------- */
+
+  document
+    .querySelectorAll("[data-rv]")
+    .forEach(button => {
+      button.onclick = () => reverter(button.dataset.rv);
     });
 
 
@@ -2137,6 +2354,30 @@ function render() {
    DESFAZER
    ========================================================= */
 
+const payBtn = t => t.done
+  ? `<button data-rv="${esc(t.id)}" title="Voltar para pendente">↩️</button>`
+  : `<button data-ok="${esc(t.id)}" title="${t.type === "in" ? "Marcar como recebido" : "Marcar como pago"}">✓</button>`;
+
+/* Desfaz um "pago/recebido": volta para pendente e o saldo atual volta ao que era. */
+function reverter(id) {
+  const t = tx.find(x => x.id === id);
+
+  if (!t) return;
+
+  t.done = false;
+  t.doneAt = null;
+
+  if (t.planned != null) {
+    t.value = t.planned;
+    t.planned = null;
+  }
+
+  save();
+  render();
+
+  toast("↩️ Voltou para pendente — saldo agora " + R(balNow()));
+}
+
 function doUndo() {
   const item =
     undo.pop();
@@ -2271,12 +2512,59 @@ addEventListener(
   }
 );
 
+async function carregarLancamentosSupabase() {
+  if (!window.controleId) {
+    tx = [];
+    return;
+  }
+
+  const { data, error } = await supabaseClient
+    .from("lancamentos")
+    .select("*")
+    .eq("controle_id", window.controleId)
+    .order("data", { ascending: true });
+
+  if (error) {
+    console.error("Erro ao carregar lançamentos:", error);
+    alert("Não foi possível carregar os lançamentos.");
+    return;
+  }
+
+  tx = (data || []).map(t => ({
+    id: t.id,
+
+    type: t.tipo === "entrada"
+      ? "in"
+      : "out",
+
+    kind: t.tipo_lancamento || "avulso",
+
+    desc: t.descricao || "",
+    value: Number(t.valor) || 0,
+
+    cat: t.categoria || "Outros",
+    by: t.quem || "",
+    pay: t.forma_pagamento || "",
+
+    cls: t.classificacao || "normal",
+
+    date: t.data,
+
+    done: !!t.pago,
+
+    fixed: !!t.recorrente,
+
+    who: t.quem || ""
+  }));
+
+  console.log("Lançamentos carregados:", tx.length);
+}
 
 /* =========================================================
    INICIALIZAÇÃO
    ========================================================= */
 
-function start() {
+async function start() {
   ensureNames();
 
   /*
@@ -2306,6 +2594,13 @@ function start() {
   } catch {
     cur = currentMonth();
   }
+
+
+  /*
+   * Carrega os lançamentos
+   * do controle atual no Supabase.
+   */
+  await carregarLancamentosSupabase();
 
 
   render();
