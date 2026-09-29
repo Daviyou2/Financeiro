@@ -769,6 +769,8 @@ const coupleSpent = arr =>
  * que ainda não aconteceram e que estejam
  * entre amanhã e o final do mês selecionado.
  */
+
+
 function flow(m) {
   const td = today();
   const end = monthEnd(m);
@@ -924,10 +926,21 @@ function render() {
     months.map(m => {
       const x = inM(m);
 
-      return (
+      let resultado =
         sum(ins(x)) -
-        sum(outs(x))
-      );
+        sum(outs(x));
+
+      /*
+      * Considera o ajuste/negativado
+      * no mês em que ele foi registrado.
+      */
+      if (
+        cfg.adjMonth === m
+      ) {
+        resultado += cfg.adj;
+      }
+
+      return resultado;
     });
 
   const mx =
@@ -1799,6 +1812,7 @@ function render() {
     }
 
     cfg.adj += v - atual;
+    cfg.adjMonth = cur;
 
     save();
     render();
