@@ -464,6 +464,32 @@ async function atualizarLancamentoSupabase(t) {
   }
 }
 
+async function atualizarStatusSupabase(t) {
+
+  if (!t.id) {
+    throw new Error("Lançamento sem ID.");
+  }
+
+  const { error } =
+    await supabaseClient
+      .from("lancamentos")
+      .update({
+        pago: !!t.doneAt
+      })
+      .eq("id", t.id)
+      .eq("controle_id", window.controleId);
+
+  if (error) {
+
+    console.error(
+      "Erro ao atualizar status:",
+      error
+    );
+
+    throw error;
+  }
+}
+
 async function carregarLancamentosSupabase() {
   if (!window.controleId) {
     tx = [];
@@ -2097,7 +2123,7 @@ function render() {
   document
     .querySelectorAll("[data-ok]")
     .forEach(button => {
-      button.onclick = () => {
+      button.onclick = async () => {
         const t =
           tx.find(
             x =>
@@ -2133,6 +2159,23 @@ function render() {
         t.done = true;
         t.doneAt = today();
 
+        try {
+          await atualizarStatusSupabase(t);
+        } catch (erro) {
+          console.error(
+            "Erro ao sincronizar pagamento:",
+            erro
+          );
+
+          t.doneAt = null;
+
+          alert(
+            "Não foi possível sincronizar o status."
+          );
+
+          return;
+        }
+
         setTimeout(() => toast(
           (t.type === "in" ? "✓ Recebido" : "✓ Pago") +
             " — saldo agora " + R(balNow()),
@@ -2151,7 +2194,7 @@ function render() {
   document
     .querySelectorAll("[data-rv]")
     .forEach(button => {
-      button.onclick = () => reverter(button.dataset.rv);
+      button.onclick = async () => reverter(button.dataset.rv);
     });
 
 
@@ -2459,23 +2502,58 @@ const payBtn = t => t.done
   : `<button data-ok="${esc(t.id)}" title="${t.type === "in" ? "Marcar como recebido" : "Marcar como pago"}">✓</button>`;
 
 /* Desfaz um "pago/recebido": volta para pendente e o saldo atual volta ao que era. */
-function reverter(id) {
+async function reverter(id) {
+
   const t = tx.find(x => x.id === id);
 
   if (!t) return;
+
+  const doneAnterior = t.done;
+  const doneAtAnterior = t.doneAt;
+  const valorAnterior = t.value;
+  const plannedAnterior = t.planned;
 
   t.done = false;
   t.doneAt = null;
 
   if (t.planned != null) {
+
     t.value = t.planned;
     t.planned = null;
+
+  }
+
+  try {
+
+    await atualizarStatusSupabase(t);
+
+  } catch (erro) {
+
+    console.error(
+      "Erro ao sincronizar reversão:",
+      erro
+    );
+
+    // Volta o lançamento para o estado anterior
+    t.done = doneAnterior;
+    t.doneAt = doneAtAnterior;
+    t.value = valorAnterior;
+    t.planned = plannedAnterior;
+
+    alert(
+      "Não foi possível sincronizar a alteração."
+    );
+
+    return;
   }
 
   save();
   render();
 
-  toast("↩️ Voltou para pendente — saldo agora " + R(balNow()));
+  toast(
+    "↩️ Voltou para pendente — saldo agora " +
+    R(balNow())
+  );
 }
 
 function doUndo() {
