@@ -1,4 +1,6 @@
-const SUPABASE_URL = 'https://ckcoymukqncylnjpcrxq.supabase.co';
+const SUPABASE_URL = 
+  "https://ckcoymukqncylnjpcrxq.supabase.co";
+
 const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_7l21hE8p5B1vrB3T5nO5lg_k7F4E1-k';
 
 const supabaseClient = window.supabase.createClient(
@@ -58,8 +60,6 @@ const MN = [
   "Jul", "Ago", "Set", "Out", "Nov", "Dez"
 ];
 
-const PASSWORD = "160225";
-
 const $ = s => document.querySelector(s);
 
 const R = v => {
@@ -81,8 +81,12 @@ const esc = s =>
   }[c]));
 
 const num = (q, d) => {
+  const raw = (prompt(q, d ?? "") || "").replace(/[R$\s]/g, "");
+
   const v = parseFloat(
-    (prompt(q, d ?? "") || "").replace(",", ".")
+    raw.includes(",")
+      ? raw.replace(/\./g, "").replace(",", ".")
+      : raw
   );
 
   return isNaN(v) ? null : v;
@@ -193,7 +197,10 @@ const norm = t => {
 
     fixed: !!t.fixed,
 
-    who: t.who || ""
+    who: t.who || "",
+
+    recurrenceId: t.recurrenceId || null,
+    recurrenceIndex: Number(t.recurrenceIndex) || 0
   };
 };
 
@@ -498,8 +505,7 @@ function flow(m) {
 
   const rows = tx
     .filter(t =>
-      !t.done &&
-      t.date > td &&
+      (!t.done || t.date > td) &&
       t.date <= end
     )
     .sort((a, b) =>
@@ -755,7 +761,7 @@ function render() {
         ${f(
           "Classificação do dinheiro",
           `
-          <select id="cl">
+          <select id="cl" ${k0 === "entrada" ? "disabled" : ""}>
             ${Object.entries(CLS).map(([k, v]) => `
               <option
                 value="${k}"
@@ -812,7 +818,11 @@ function render() {
           e
             ? ""
             : `
-              <label class="row note">
+              <label
+                class="row note"
+                id="fxw"
+                style="display:${k0 === "avulso" ? "none" : "flex"}"
+              >
                 <input
                   id="fx"
                   type="checkbox"
@@ -877,6 +887,9 @@ function render() {
         ${opt(N, cfg.me)}
       </select>
     </div>
+
+
+
 
 
     <!-- SITUAÇÃO -->
@@ -1112,16 +1125,10 @@ function render() {
               </div>
 
 
-              <button
-                data-ok="${t.id}"
-                title="${
-                  t.type === "in"
-                    ? "Marcar como recebido"
-                    : "Marcar como pago"
-                }"
-              >
-                ✓
-              </button>
+              ${t.done ? "" : `<button
+                data-ok="${esc(t.id)}"
+                title="${t.type === "in" ? "Marcar como recebido" : "Marcar como pago"}"
+              >✓</button>`}
 
             </div>
 
@@ -1392,13 +1399,27 @@ function render() {
           Importar
         </button>
 
-        <button
-          class="g"
-          id="lk"
-        >
-          Bloquear
-        </button>
+      </div>
+    </div>
 
+
+    <!-- CONTROLE -->
+
+    <div class="card">
+      <h2>👥 ${esc(window.controleAtual?.nome || "Nosso controle")}</h2>
+
+      <p class="note">Código para convidar outra pessoa:</p>
+
+      <div class="v code">${esc(window.controleAtual?.codigo_convite || "—")}</div>
+
+      <div class="row">
+        <button class="g" id="copiarCodigo">📋 Copiar código</button>
+        <button class="g" id="nm">✏️ Alterar nomes</button>
+      </div>
+
+      <div class="row" style="margin-top:8px">
+        <button class="g" id="lk">Sair do controle</button>
+        <button class="g" id="lo">Sair da conta</button>
       </div>
     </div>
 
@@ -1518,26 +1539,28 @@ function render() {
 
   if ($("#ty")) {
     $("#ty").onchange = ev => {
-      if (editId) {
-        return;
+      const kind = ev.target.value;
+
+      $("#cl").disabled = kind === "entrada";
+
+      const fxw = $("#fxw");
+
+      if (fxw) {
+        fxw.style.display = kind === "avulso" ? "none" : "flex";
+
+        if (kind === "avulso") {
+          $("#fx").checked = false;
+        }
       }
 
-      const kind =
-        ev.target.value;
+      if (editId) return;
 
       if (kind === "entrada") {
         $("#dn").checked = true;
         $("#cl").value = "normal";
-      }
-
-      if (kind === "avulso") {
+      } else if (kind === "avulso") {
         $("#cl").value = "casal";
-      }
-
-      if (
-        kind === "fixa" ||
-        kind === "recorrente"
-      ) {
+      } else {
         $("#cl").value = "normal";
       }
     };
@@ -1623,10 +1646,9 @@ function render() {
           tx.find(t => t.id === editId);
 
         if (item) {
-          Object.assign(
-            item,
-            base
-          );
+          const { who: _who, ...rest } = base;
+
+          Object.assign(item, rest);
 
           /*
            * Mantém o fato de ser uma
@@ -1651,8 +1673,7 @@ function render() {
       const repeat =
         $("#fx") &&
         $("#fx").checked &&
-        kind !== "avulso" &&
-        kind !== "entrada";
+        kind !== "avulso";
 
 
       const total =
@@ -1880,18 +1901,97 @@ function render() {
     });
 
 
-  /* ---------- Bloquear ---------- */
+  
 
-  $("#lk").onclick = () => {
-    localStorage.removeItem(
-      "fin_ok"
+  $("#lk").onclick = async () => {
+    const ok = confirm(
+      "Sair deste controle?\n\nVocê continuará conectado à sua conta e poderá entrar em outro controle usando um código de convite."
     );
 
-    sessionStorage.removeItem(
-      "fin_ok"
+    if (!ok) return;
+
+    const { error } = await supabaseClient.rpc(
+      "sair_controle"
     );
 
-    lock();
+    if (error) {
+      console.error(error);
+      alert("Não foi possível sair do controle.");
+      return;
+    }
+
+    window.controleId = null;
+    window.membroId = null;
+    window.controleAtual = null;
+
+    mostrarTelaControle();
+  };
+
+
+  /* ---------- Copiar código ---------- */
+
+  $("#copiarCodigo").onclick = async () => {
+    const codigo = window.controleAtual?.codigo_convite;
+
+    if (!codigo) return;
+
+    try {
+      await navigator.clipboard.writeText(codigo);
+      toast("✅ Código copiado!");
+    } catch {
+      alert("Código: " + codigo);
+    }
+  };
+
+
+  /* ---------- Alterar nomes ---------- */
+
+  $("#nm").onclick = () => {
+    const old = [...cfg.names];
+
+    const a = (prompt("Nome da pessoa 1", old[0]) || "").trim();
+    if (!a) return;
+
+    const b = (prompt("Nome da pessoa 2", old[1]) || "").trim();
+    if (!b) return;
+
+    if (
+      a.toLowerCase() === b.toLowerCase() ||
+      a.toLowerCase() === "juntos" ||
+      b.toLowerCase() === "juntos"
+    ) {
+      alert("Use dois nomes diferentes (e que não sejam “Juntos”).");
+      return;
+    }
+
+    const map = { [old[0]]: a, [old[1]]: b };
+
+    tx.forEach(t => {
+      if (map[t.by]) t.by = map[t.by];
+      if (map[t.who]) t.who = map[t.who];
+    });
+
+    if (map[cfg.me]) cfg.me = map[cfg.me];
+
+    cfg.names = [a, b];
+
+    save();
+    render();
+  };
+
+
+  /* ---------- Sair da conta ---------- */
+
+  $("#lo").onclick = async () => {
+    if (!confirm("Sair da sua conta neste aparelho?")) return;
+
+    await supabaseClient.auth.signOut();
+
+    window.controleId = null;
+    window.membroId = null;
+    window.controleAtual = null;
+
+    mostrarLogin();
   };
 
 
@@ -2010,6 +2110,8 @@ function render() {
           cur = data.ui.cur;
         }
 
+        ensureNames();
+
         save();
 
         render();
@@ -2030,7 +2132,6 @@ function render() {
     input.click();
   };
 }
-
 
 /* =========================================================
    DESFAZER
@@ -2172,136 +2273,10 @@ addEventListener(
 
 
 /* =========================================================
-   SENHA
-   ========================================================= */
-
-function lock() {
-  $("#app").innerHTML = `
-    <div class="lock">
-
-      <div
-        style="
-          font-size:42px;
-          margin-bottom:10px
-        "
-      >
-        💰
-      </div>
-
-      <h1>
-        Nosso Controle
-      </h1>
-
-      <p class="note">
-        Digite a senha para entrar
-      </p>
-
-      <input
-        id="pw"
-        type="password"
-        inputmode="numeric"
-        autocomplete="current-password"
-        placeholder="Senha"
-      >
-
-      <label
-        class="row note"
-        style="justify-content:center"
-      >
-        <input
-          id="kp"
-          type="checkbox"
-          style="flex:0;min-width:0"
-          checked
-        >
-
-        Manter conectado neste aparelho
-      </label>
-
-      <button
-        id="go"
-        style="
-          width:100%;
-          margin-top:10px
-        "
-      >
-        Entrar
-      </button>
-
-      <p
-        class="note out"
-        id="er"
-        style="margin-top:10px"
-      ></p>
-
-    </div>
-  `;
-
-
-  const go = () => {
-    const p =
-      $("#pw").value;
-
-    if (
-      p !== PASSWORD
-    ) {
-      $("#er").textContent =
-        "Senha incorreta.";
-
-      $("#pw").value = "";
-
-      $("#pw").focus();
-
-      return;
-    }
-
-
-    const storage =
-      $("#kp").checked
-        ? localStorage
-        : sessionStorage;
-
-    storage.setItem(
-      "fin_ok",
-      "1"
-    );
-
-    start();
-  };
-
-
-  $("#go").onclick =
-    go;
-
-
-  $("#pw").onkeydown =
-    ev => {
-      if (
-        ev.key === "Enter"
-      ) {
-        go();
-      }
-    };
-
-
-  $("#pw").focus();
-}
-
-
-/* =========================================================
    INICIALIZAÇÃO
    ========================================================= */
 
 function start() {
-  const logged =
-    localStorage.getItem("fin_ok") ||
-    sessionStorage.getItem("fin_ok");
-
-  if (!logged) {
-    lock();
-    return;
-  }
-
   ensureNames();
 
   /*
@@ -2433,6 +2408,12 @@ async function mostrarLogin() {
 
     await iniciarSistema();
   };
+
+  document.getElementById("loginSenha").addEventListener("keydown", ev => {
+    if (ev.key === "Enter") {
+      document.getElementById("btnEntrar").click();
+    }
+  });
 
   document.getElementById("btnCriarConta").onclick = async () => {
     const email = document.getElementById("loginEmail").value.trim();
