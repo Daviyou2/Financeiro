@@ -866,11 +866,17 @@ function month(m) {
       : 0;
 
   /*
-   * Dinheiro que teoricamente pode ficar
-   * protegido depois de reservar o orçamento.
+   * Dinheiro que fica protegido ("Não mexer").
+   *
+   * A "sobra" já desconta os gastos do casal (pagos ou
+   * pendentes). Esses gastos saem de dentro do orçamento,
+   * então só o que ainda falta gastar (rest) fica reservado.
+   * Assim, gastar do orçamento não diminui o "Não mexer".
+   * Se passar do orçamento, o excesso sai do dinheiro real
+   * (rest negativo não devolve nada).
    */
   const prot =
-    sobra - r.b;
+    sobra - Math.max(0, rest);
 
   return {
     a,
@@ -1271,7 +1277,7 @@ function render() {
 
 
       <button class="g" id="eb">
-        ✏️ Alterar orçamento
+        ✏️ Alterar "Não mexer"
       </button>
 
     </div>
@@ -1737,58 +1743,62 @@ function render() {
   };
 
 
-  /* ---------- Alterar orçamento ---------- */
+  /* ---------- Alterar "Não mexer" ---------- */
 
   $("#eb").onclick = () => {
     const r = M.r;
 
-    const b = num(
-      "Orçamento do casal em " +
+    const v = num(
+      "Quanto deixar em \"Não mexer\" em " +
       label(cur) +
       " (R$)",
-      r.b
+      Math.max(0, M.prot)
     );
 
-    if (b == null || b < 0) {
+    if (v == null || v < 0) {
       return;
     }
 
-    const a = num(
-      "Parte de " +
-      N[0] +
-      " (R$)",
-      r.s[0]
-    );
+    /*
+     * Dinheiro disponível antes de gastar do orçamento
+     * = sobra + o que já foi gasto/comprometido do casal.
+     * Não mexer = disponível - orçamento, então:
+     * orçamento = disponível - não mexer.
+     * (Gastos por si só não mexem no orçamento nem nas partes.)
+     */
+    const b = Math.round((M.sobra + M.spent - v) * 100) / 100;
 
-    if (a == null || a < 0) {
-      return;
-    }
-
-    const c = num(
-      "Parte de " +
-      N[1] +
-      " (R$)",
-      r.s[1]
-    );
-
-    if (c == null || c < 0) {
-      return;
-    }
-
-    if (a + c > b) {
+    if (b < 0) {
       alert(
-        "As partes dos dois passam do orçamento total."
+        "O valor passa do dinheiro disponível (" +
+        R(M.sobra + M.spent) +
+        "). Escolha um valor menor."
       );
 
       return;
     }
 
+    /*
+     * Mantém a divisão entre os dois na mesma proporção.
+     */
+    const cents = x => Math.round(x * 100) / 100;
+
+    let s0, s1;
+
+    if (r.b > 0) {
+      s0 = cents(r.s[0] * b / r.b);
+      s1 = cents(r.s[1] * b / r.b);
+    } else {
+      s0 = cents(b / 2);
+      s1 = cents(b / 2);
+    }
+
     cfg.rules[cur] = {
       b,
       s: [
-        a,
-        c,
-        b - a - c
+        s0,
+        s1,
+        cents(b - s0 - s1)
       ]
     };
 
