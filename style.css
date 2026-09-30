@@ -121,3 +121,13 @@ input:focus,select:focus{box-shadow:0 0 0 4px color-mix(in srgb,var(--ac) 22%,tr
 @media (prefers-reduced-motion:reduce){
   *,*::before,*::after{animation-duration:.01ms!important;animation-delay:0s!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
 }
+
+/* =========================================================
+   ABAS E CARTÕES
+   ========================================================= */
+.tabs{display:flex;gap:6px;margin-bottom:12px}
+.tabs button{flex:1}
+.tabs button.on{background:var(--ac);color:#fff;border-color:var(--ac)}
+.li button[data-cok]{background:var(--ac);color:#fff;border:0;padding:6px 10px}
+.li .bar{margin:8px 0 4px}
+.li .bar .s{width:auto;white-space:nowrap}

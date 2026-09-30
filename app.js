@@ -258,6 +258,8 @@ let cur =
 
 let editId = null;
 let showForm = false;
+let cardForm = false;
+let tab = ui.tab === "cartoes" ? "cartoes" : "mes";
 
 
 /* ---------- Desfazer ---------- */
@@ -289,6 +291,7 @@ const saveUndo = () => {
 const saveUi = () => {
   ui = {
     cur,
+    tab,
     y: window.scrollY
   };
 
@@ -344,6 +347,8 @@ async function atualizarConfig(mut) {
   if (r.error) throw r.error;
   if (!r.data || !r.data.length) throw new Error("Banco bloqueou a gravação da configuração.");
   cfg.rules = c.rules; cfg.adj = Number(c.adj) || 0; cfg.adjMonth = c.adjMonth;
+  cfg.carry = c.carry || {};
+  cfg.cartoes = c.cartoes || {cards: [], compras: {}};
 }
 
 async function atualizarLancamentoSupabase(t) {
@@ -413,6 +418,8 @@ async function carregarLancamentosSupabase() {
   cfg.rules = c.rules || {};
   cfg.adj = Number(c.adj) || 0;
   cfg.adjMonth = c.adjMonth;
+  cfg.carry = c.carry || {};
+  cfg.cartoes = c.cartoes || {cards: [], compras: {}};
 
   tx = (lan.data || []).map(t => norm({
     id: t.id,
@@ -440,7 +447,7 @@ async function carregarLancamentosSupabase() {
 /* Os dois celulares se atualizam: tempo real + ao voltar para o app + a cada 30 s. */
 let canal = null, recarregando = false;
 async function recarregar() {
-  if (recarregando || !window.controleId || editId || showForm) return;
+  if (recarregando || !window.controleId || editId || showForm || cardForm) return;
   recarregando = true;
   try { if (await carregarLancamentosSupabase()) render(); } finally { recarregando = false; }
 }
@@ -647,17 +654,46 @@ const coupleSpent = arr =>
  */
 
 
+const monthOf = t => String(t.date).slice(0, 7);
+
+/*
+ * Contas NÃO pagas do mês anterior a m.
+ * Se o mês anterior também estiver com "Trazer pendentes"
+ * ligado, as pendentes dele (vindas de antes) seguem junto.
+ */
+function pendFrom(m) {
+  const p = shift(m, -1);
+  let list = tx.filter(t => monthOf(t) === p && !t.done);
+
+  if (cfg.carry && cfg.carry[p]) {
+    list = list.concat(pendFrom(p));
+  }
+
+  return list;
+}
+
+/* Pendentes que o usuário escolheu trazer para o mês m. */
+const carried = m =>
+  cfg.carry && cfg.carry[m]
+    ? pendFrom(m)
+    : [];
+
+/*
+ * Cada mês só enxerga o que pertence a ele.
+ * Pendências de meses anteriores só entram
+ * se "Trazer pendentes?" estiver ligado naquele mês.
+ */
 function flow(m) {
   const td = today();
-  const end = monthEnd(m);
 
   let bal = balNow();
 
   const rows = tx
     .filter(t =>
-      (!t.done || effDate(t) > td) &&
-      t.date <= end
+      monthOf(t) === m &&
+      (!t.done || effDate(t) > td)
     )
+    .concat(carried(m))
     .sort((a, b) =>
       a.date.localeCompare(b.date)
     )
@@ -780,10 +816,694 @@ function month(m) {
 
 
 /* =========================================================
+   CARTÕES — COMPRAS PARCELADAS
+
+   Cada parcela é um lançamento normal (tabela "lancamentos"),
+   todas com o mesmo recorrencia_id e recorrencia_indice 0, 1, 2...
+   Os dados da compra (nº de parcelas, cartão) ficam em
+   controles.config.cartoes, então não precisa mexer no banco.
+   Excluir uma parcela apaga só aquele lançamento: as outras
+   continuam, com a numeração original (ex.: 3/10, 5/10).
+   ========================================================= */
+
+const comprasCfg = () => (cfg.cartoes && cfg.cartoes.compras) || {};
+
+const compraDe = t =>
+  (t.recurrenceId && comprasCfg()[t.recurrenceId]) || null;
+
+const numParcela = t => (Number(t.recurrenceIndex) || 0) + 1;
+
+const parcTag = t => {
+  const c = compraDe(t);
+
+  return c
+    ? `<span class="tag">${numParcela(t)}/${c.n}</span>`
+    : "";
+};
+
+const parcelasDaCompra = rid =>
+  tx
+    .filter(t => t.recurrenceId === rid)
+    .sort((a, b) => a.recurrenceIndex - b.recurrenceIndex);
+
+const parcelasDoMes = m =>
+  tx.filter(t => monthOf(t) === m && compraDe(t));
+
+/* Divide em centavos; os centavos que sobram vão para as primeiras parcelas. */
+const dividirParcelas = (v, n, modo) => {
+  const total =
+    modo === "parcela"
+      ? Math.round(v * 100) * n
+      : Math.round(v * 100);
+
+  const base = Math.floor(total / n);
+  const resto = total - base * n;
+
+  return Array.from(
+    { length: n },
+    (_, k) => (base + (k < resto ? 1 : 0)) / 100
+  );
+};
+
+
+/* ---------- Abas ---------- */
+
+const tabsHtml = () => `
+  <div class="tabs">
+    <button id="tb1" class="g ${tab === "mes" ? "on" : ""}">📅 Mês</button>
+    <button id="tb2" class="g ${tab === "cartoes" ? "on" : ""}">💳 Cartões</button>
+  </div>
+`;
+
+function setTab(t) {
+  if (tab === t) return;
+
+  tab = t;
+  editId = null;
+  showForm = false;
+  cardForm = false;
+
+  saveUi();
+  render();
+  window.scrollTo(0, 0);
+}
+
+function bindTabs() {
+  $("#tb1").onclick = () => setTab("mes");
+  $("#tb2").onclick = () => setTab("cartoes");
+}
+
+
+/* ---------- Ações ---------- */
+
+const cardPayBtn = t => t.done
+  ? `<button data-crv="${esc(t.id)}" title="Voltar para pendente">↩️</button>`
+  : `<button data-cok="${esc(t.id)}" title="Marcar como pago">✓</button>`;
+
+async function pagarParcela(id) {
+  const t = tx.find(x => x.id === id);
+
+  if (!t) return;
+
+  t.done = true;
+  t.doneAt = today();
+
+  try {
+    await atualizarStatusSupabase(t);
+  } catch (erro) {
+    console.error("Erro ao sincronizar pagamento:", erro);
+
+    await carregarLancamentosSupabase();
+    render();
+
+    alert("Não foi possível sincronizar o status.\n\n" + (erro?.message || ""));
+    return;
+  }
+
+  save();
+  render();
+
+  toast(
+    "✓ Pago — saldo agora " + R(balNow()),
+    "Desfazer",
+    () => reverter(t.id)
+  );
+}
+
+/* Exclui SÓ a parcela daquele mês. As outras continuam. */
+async function excluirParcela(id) {
+  const t = tx.find(x => x.id === id);
+
+  if (!t) return;
+
+  const c = compraDe(t);
+  const nome =
+    (t.desc || "Compra") + " " + numParcela(t) + "/" + (c ? c.n : "?");
+
+  const ok = confirm(
+    `Excluir só a parcela ${numParcela(t)}/${c ? c.n : "?"} de "${t.desc}" ` +
+    `(${label(monthOf(t))}) no valor de ${R(t.value)}?\n\n` +
+    "As outras parcelas continuam."
+  );
+
+  if (!ok) return;
+
+  try {
+    await excluirLancamentoSupabase(t.id);
+  } catch (erro) {
+    console.error(erro);
+
+    alert("Não foi possível excluir no Supabase. A parcela foi mantida.");
+    return;
+  }
+
+  const index = tx.findIndex(x => x.id === t.id);
+
+  if (index >= 0) tx.splice(index, 1);
+
+  undo.push({ t, i: Math.max(0, index) });
+  undo = undo.slice(-20);
+
+  saveUndo();
+  save();
+  render();
+
+  toast(
+    "🗑️ " + nome + " (" + label(monthOf(t)) + ") apagada",
+    "Desfazer",
+    doUndo
+  );
+}
+
+/* Exclui todas as parcelas AINDA NÃO PAGAS da compra. As já pagas ficam no histórico. */
+async function excluirParcelamento(rid) {
+  const c = comprasCfg()[rid];
+  const todas = parcelasDaCompra(rid);
+  const pend = todas.filter(t => !t.done);
+  const pagas = todas.length - pend.length;
+
+  if (!c || !pend.length) {
+    toast("Nenhuma parcela pendente para excluir.");
+    return;
+  }
+
+  const ok = confirm(
+    `Excluir as ${pend.length} parcelas pendentes de "${c.desc}" ` +
+    `(${R(sum(pend))})?\n\n` +
+    (pagas
+      ? `As ${pagas} já pagas continuam no histórico.`
+      : "Nenhuma parcela foi paga ainda.")
+  );
+
+  if (!ok) return;
+
+  try {
+    const { data, error } = await supabaseClient
+      .from("lancamentos")
+      .delete()
+      .eq("controle_id", window.controleId)
+      .eq("recorrencia_id", rid)
+      .eq("pago", false)
+      .select("id");
+
+    if (error) throw error;
+
+    if (!data || !data.length) {
+      throw new Error("Nenhum registro foi apagado no Supabase.");
+    }
+
+    if (!pagas) {
+      await atualizarConfig(n => {
+        if (n.cartoes && n.cartoes.compras) delete n.cartoes.compras[rid];
+      });
+    }
+  } catch (erro) {
+    console.error(erro);
+
+    await carregarLancamentosSupabase();
+    render();
+
+    alert("Não foi possível excluir no Supabase.\n\n" + (erro?.message || ""));
+    return;
+  }
+
+  await carregarLancamentosSupabase();
+  save();
+  render();
+
+  toast("🗑️ Parcelas pendentes de " + c.desc + " apagadas");
+}
+
+
+/* ---------- Tela ---------- */
+
+function renderCartoes() {
+  const td = today();
+  const cm = currentMonth();
+  const N = cfg.names;
+
+  const lista = parcelasDoMes(cur).sort(
+    (a, b) =>
+      a.date.localeCompare(b.date) ||
+      a.recurrenceIndex - b.recurrenceIndex
+  );
+
+  const totMes = cents(sum(lista));
+  const pagoMes = cents(sum(lista.filter(t => t.done)));
+  const pendMes = cents(totMes - pagoMes);
+
+  const porCartao = group(
+    lista,
+    t => compraDe(t).cartao || "Sem cartão"
+  );
+
+  const rids = Object.keys(comprasCfg())
+    .filter(rid => parcelasDaCompra(rid).length)
+    .sort((a, b) => {
+      const pa = parcelasDaCompra(a).find(t => !t.done);
+      const pb = parcelasDaCompra(b).find(t => !t.done);
+
+      return (pa ? pa.date : "9999").localeCompare(pb ? pb.date : "9999");
+    });
+
+  const opt = (list, selected) =>
+    list.map(o => `
+      <option value="${esc(o)}" ${o === selected ? "selected" : ""}>
+        ${esc(o)}
+      </option>
+    `).join("");
+
+  const f = (title, html) => `
+    <label class="f">
+      <span class="k">${title}</span>
+      ${html}
+    </label>
+  `;
+
+
+  /* ---------- Formulário ---------- */
+
+  const cards = (cfg.cartoes && cfg.cartoes.cards) || [];
+
+  const form = cardForm ? `
+    <div class="card" id="fm">
+      <h2>Nova compra parcelada</h2>
+
+      <div class="row fm">
+
+        ${f("Descrição", `
+          <input id="c_de" placeholder="Ex.: notebook, geladeira...">
+        `)}
+
+        ${f("Valor", `
+          <input id="c_va" type="number" step="0.01" min="0"
+                 inputmode="decimal" placeholder="R$ 0,00">
+        `)}
+
+        ${f("O valor informado é", `
+          <select id="c_md">
+            <option value="total">Total da compra</option>
+            <option value="parcela">Valor de cada parcela</option>
+          </select>
+        `)}
+
+        ${f("Nº de parcelas", `
+          <input id="c_n" type="number" min="1" max="60" step="1"
+                 inputmode="numeric" value="2">
+        `)}
+
+        ${f("Cartão (opcional)", `
+          <input id="c_cc" list="c_cards" placeholder="Ex.: Nubank">
+          <datalist id="c_cards">
+            ${cards.map(x => `<option value="${esc(x)}">`).join("")}
+          </datalist>
+        `)}
+
+        ${f("Vencimento da 1ª parcela", `
+          <input id="c_da" type="date" value="${addMonths(td, 1)}">
+        `)}
+
+        ${f("Categoria", `
+          <select id="c_ca">${opt(CATS, "Outros")}</select>
+        `)}
+
+        ${f("Quem", `
+          <select id="c_by">${opt([...N, "Juntos"], cfg.me)}</select>
+        `)}
+
+        ${f("Classificação do dinheiro", `
+          <select id="c_cl">
+            ${Object.entries(CLS).map(([k, v]) => `
+              <option value="${k}" ${k === "casal" ? "selected" : ""}>${v}</option>
+            `).join("")}
+          </select>
+        `)}
+
+        <div class="row">
+          <button id="c_ad">Adicionar</button>
+          <button class="g" id="c_cn">Cancelar</button>
+        </div>
+      </div>
+
+      <p class="note" id="c_pv"></p>
+
+      <p class="note">
+        As parcelas são criadas automaticamente, uma por mês, a partir
+        do vencimento da 1ª. Dá para excluir uma parcela isolada depois.
+      </p>
+    </div>
+  ` : `
+    <button class="fab" id="nw">+ Compra parcelada</button>
+  `;
+
+
+  /* ---------- Compras (em qual parcela estou) ---------- */
+
+  const comprasHtml = rids.map(rid => {
+    const c = comprasCfg()[rid];
+    const ps = parcelasDaCompra(rid);
+    const pagas = ps.filter(t => t.done).length;
+    const falta = ps.filter(t => !t.done);
+    const noMes = ps.find(t => monthOf(t) === cm);
+    const prox = falta[0];
+
+    const st = [];
+
+    if (!prox) {
+      st.push("✅ Quitado");
+    } else {
+      if (noMes) {
+        st.push(
+          `Você está na parcela <b>${numParcela(noMes)}/${c.n}</b> (${label(cm)})` +
+          (noMes.done ? " · paga" : "")
+        );
+      } else if (monthOf(prox) > cm) {
+        st.push(
+          `Começa/continua na parcela <b>${numParcela(prox)}/${c.n}</b> em ${label(monthOf(prox))}`
+        );
+      }
+
+      if (monthOf(prox) < cm) {
+        st.push(
+          `⚠️ parcela ${numParcela(prox)}/${c.n} de ${label(monthOf(prox))} ainda não paga`
+        );
+      }
+    }
+
+    const pct = ps.length ? pagas / ps.length * 100 : 0;
+
+    return `
+      <div class="li">
+        <div>
+          💳 ${esc(c.desc)}
+          ${c.cartao ? `<span class="tag">${esc(c.cartao)}</span>` : ""}
+          <br>
+          <small>${st.join(" · ")}</small>
+
+          <div class="bar">
+            <span class="t"><i style="width:${pct}%"></i></span>
+            <span class="s">${pagas}/${ps.length} pagas</span>
+          </div>
+
+          <small>
+            ${falta.length
+              ? "faltam " + R(sum(falta)) + " em " + falta.length + (falta.length > 1 ? " parcelas" : " parcela")
+              : "sem parcelas pendentes"}
+            · ${c.n}x · ${label(monthOf(ps[0]))} a ${label(monthOf(ps[ps.length - 1]))}
+          </small>
+        </div>
+
+        <div class="row">
+          <button data-cdall="${esc(rid)}" title="Excluir parcelas pendentes">🗑️</button>
+        </div>
+      </div>
+    `;
+  }).join("");
+
+
+  /* ---------- HTML ---------- */
+
+  $("#app").innerHTML = `
+
+    <div class="row top">
+      <h1>💰 Nosso Controle</h1>
+
+      <div class="row">
+        <button class="g" id="pv">‹</button>
+        <b>${label(cur)}</b>
+        <button class="g" id="nx">›</button>
+      </div>
+    </div>
+
+    ${tabsHtml()}
+
+    <div class="card">
+      <h2>💳 Cartões em ${label(cur)}</h2>
+
+      <div class="k">Total de parcelas do mês</div>
+      <div class="v big">${R(totMes)}</div>
+
+      <div class="g3" style="margin-top:10px;grid-template-columns:repeat(2,1fr)">
+        <div>
+          <div class="k">Já pago</div>
+          <div class="v in">${R(pagoMes)}</div>
+        </div>
+
+        <div>
+          <div class="k">A pagar</div>
+          <div class="v out">${R(pendMes)}</div>
+        </div>
+      </div>
+
+      ${lista.length ? `
+        <div class="k" style="margin-top:12px">Por cartão</div>
+        ${bars(porCartao)}
+      ` : ""}
+    </div>
+
+    ${form}
+
+    <div class="card">
+      <h2>Parcelas de ${label(cur)}</h2>
+
+      ${lista.length ? lista.map(t => {
+        const c = compraDe(t);
+
+        return `
+          <div class="li ${t.done ? "" : "pend"}">
+            <div>
+              💳 ${esc(t.desc || "Compra")}
+              ${parcTag(t)}
+              ${c.cartao ? `<span class="tag">${esc(c.cartao)}</span>` : ""}
+              ${t.done
+                ? '<span class="tag">✓ pago</span>'
+                : `<span class="tag ${t.date < td ? "late" : ""}">pendente</span>`}
+              <br>
+              <small>
+                vence ${dm(t.date)}
+                · ${esc(t.cat || "Outros")}
+                · ${esc(t.by || "—")}
+              </small>
+            </div>
+
+            <div class="row">
+              <b class="out">-${R(t.value)}</b>
+              ${cardPayBtn(t)}<button data-cdp="${esc(t.id)}" title="Excluir só esta parcela">🗑️</button>
+            </div>
+          </div>
+        `;
+      }).join("") : `
+        <p class="note">Nenhuma parcela de cartão em ${label(cur)}.</p>
+      `}
+
+      <p class="note">
+        🗑️ apaga somente a parcela deste mês; o restante do parcelamento continua.
+      </p>
+    </div>
+
+    <div class="card">
+      <h2>Compras parceladas</h2>
+
+      ${comprasHtml || `
+        <p class="note">Nenhuma compra parcelada cadastrada ainda.</p>
+      `}
+
+      ${comprasHtml ? `
+        <p class="note">
+          🗑️ aqui apaga todas as parcelas ainda não pagas da compra.
+          As já pagas ficam no histórico.
+        </p>
+      ` : ""}
+    </div>
+
+  `;
+
+
+  /* ---------- Eventos ---------- */
+
+  $("#pv").onclick = () => {
+    cur = shift(cur, -1);
+    saveUi();
+    render();
+  };
+
+  $("#nx").onclick = () => {
+    cur = shift(cur, 1);
+    saveUi();
+    render();
+  };
+
+  bindTabs();
+
+  if ($("#nw")) {
+    $("#nw").onclick = () => {
+      cardForm = true;
+      render();
+
+      setTimeout(() => {
+        $("#fm")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 50);
+    };
+  }
+
+  if ($("#c_cn")) {
+    $("#c_cn").onclick = () => {
+      cardForm = false;
+      render();
+    };
+  }
+
+  if ($("#c_ad")) {
+    /* Prévia: "10x de R$ 100,00 · Nov/26 a Ago/27" */
+    const prever = () => {
+      const v = parseFloat($("#c_va").value);
+      const n = parseInt($("#c_n").value, 10);
+      const d = $("#c_da").value;
+      const el = $("#c_pv");
+
+      if (!(v > 0) || !(n >= 1) || !d) {
+        el.textContent = "";
+        return;
+      }
+
+      const ps = dividirParcelas(v, n, $("#c_md").value);
+      const tot = cents(ps.reduce((a, b) => a + b, 0));
+      const iguais = ps.every(x => x === ps[0]);
+
+      el.textContent =
+        n + "x " +
+        (iguais ? "de " + R(ps[0]) : "de " + R(ps[n - 1]) + " a " + R(ps[0])) +
+        " · total " + R(tot) +
+        " · " + label(d.slice(0, 7)) + " a " + label(addMonths(d, n - 1).slice(0, 7));
+    };
+
+    ["c_va", "c_n", "c_da", "c_md"].forEach(id => {
+      $("#" + id).oninput = prever;
+      $("#" + id).onchange = prever;
+    });
+
+    $("#c_ad").onclick = async () => {
+      const desc = $("#c_de").value.trim();
+      const v = parseFloat($("#c_va").value);
+      const n = parseInt($("#c_n").value, 10);
+      const date = $("#c_da").value;
+
+      if (!desc || !(v > 0) || !(n >= 1 && n <= 60) || !date) {
+        alert("Informe descrição, valor, número de parcelas (1 a 60) e o vencimento da 1ª parcela.");
+        return;
+      }
+
+      $("#c_ad").disabled = true;
+
+      const valores = dividirParcelas(v, n, $("#c_md").value);
+      const total = cents(valores.reduce((a, b) => a + b, 0));
+
+      let cartao = $("#c_cc").value.trim();
+      const jaTem = cards.find(x => x.toLowerCase() === cartao.toLowerCase());
+
+      if (jaTem) cartao = jaTem;
+
+      const rid = uuid();
+      const cls = $("#c_cl").value;
+
+      const base = {
+        type: "out",
+        kind: "avulso",
+        desc,
+        cat: $("#c_ca").value || "Outros",
+        by: $("#c_by").value || cfg.me,
+        pay: "Crédito",
+        cls,
+        done: false,
+        fixed: true,
+        who: cfg.me,
+        recurrenceId: rid
+      };
+
+      const novos = valores.map((valor, k) => ({
+        ...base,
+        value: valor,
+        date: addMonths(date, k),
+        recurrenceIndex: k
+      }));
+
+      try {
+        /* Primeiro registra a compra; depois cria as parcelas. */
+        await atualizarConfig(c => {
+          c.cartoes = c.cartoes || {};
+          c.cartoes.cards = c.cartoes.cards || [];
+          c.cartoes.compras = c.cartoes.compras || {};
+
+          if (cartao && !c.cartoes.cards.some(x => x.toLowerCase() === cartao.toLowerCase())) {
+            c.cartoes.cards.push(cartao);
+          }
+
+          c.cartoes.compras[rid] = {
+            desc,
+            n,
+            cartao,
+            total,
+            primeira: date
+          };
+        });
+
+        try {
+          await inserirLancamentos(novos);
+        } catch (erro) {
+          await atualizarConfig(c => {
+            if (c.cartoes && c.cartoes.compras) delete c.cartoes.compras[rid];
+          }).catch(() => {});
+
+          throw erro;
+        }
+
+        await carregarLancamentosSupabase();
+      } catch (erro) {
+        console.error(erro);
+
+        alert("Não foi possível salvar no banco. A compra NÃO foi criada.\n\n" + (erro?.message || ""));
+        $("#c_ad").disabled = false;
+        return;
+      }
+
+      cardForm = false;
+      cur = date.slice(0, 7);
+
+      save();
+      render();
+
+      toast(
+        "💳 " + n + " parcelas criadas (" +
+        label(date.slice(0, 7)) + " a " + label(addMonths(date, n - 1).slice(0, 7)) + ")"
+      );
+    };
+  }
+
+  document.querySelectorAll("[data-cok]").forEach(b => {
+    b.onclick = () => pagarParcela(b.dataset.cok);
+  });
+
+  document.querySelectorAll("[data-crv]").forEach(b => {
+    b.onclick = () => reverter(b.dataset.crv);
+  });
+
+  document.querySelectorAll("[data-cdp]").forEach(b => {
+    b.onclick = () => excluirParcela(b.dataset.cdp);
+  });
+
+  document.querySelectorAll("[data-cdall]").forEach(b => {
+    b.onclick = () => excluirParcelamento(b.dataset.cdall);
+  });
+}
+
+
+/* =========================================================
    TELA
    ========================================================= */
 
 function render() {
+  if (tab === "cartoes") { renderCartoes(); return; }
+
   const M = month(cur);
   const F = flow(cur);
   const td = today();
@@ -1056,6 +1776,8 @@ function render() {
     </div>
 
 
+    ${tabsHtml()}
+
     <div class="row top"><span class="note">Lançando como <b>${esc(cfg.me)}</b></span></div>
 
 
@@ -1147,13 +1869,31 @@ function render() {
 
       <p class="note">
         A previsão considera o saldo atual e os
-        lançamentos futuros ainda pendentes.
+        lançamentos pendentes deste mês (mais os do mês anterior,
+        se você ligar "Trazer pendentes").
         O saldo atual sobe e desce sozinho quando você marca algo
         como pago ou recebido, e o botão ↩️ desfaz.
         O orçamento do casal é uma regra separada
         e não aumenta automaticamente quando sobra dinheiro.
       </p>
 
+
+      ${(() => {
+        const pp = pendFrom(cur);
+        const on = !!(cfg.carry && cfg.carry[cur]);
+
+        if (!pp.length && !on) return "";
+
+        return `
+          <label class="row note" style="margin-top:10px">
+            <input id="cy" type="checkbox" style="flex:0;min-width:0" ${on ? "checked" : ""}>
+            Trazer pendentes?
+            (${pp.length
+              ? pp.length + (pp.length > 1 ? " contas" : " conta") + " de " + label(shift(cur, -1)) + " · " + R(sum(pp))
+              : "nenhuma pendente"})
+          </label>
+        `;
+      })()}
 
       <button class="g" id="eb">
         ✏️ Alterar "Não mexer"
@@ -1447,10 +2187,11 @@ function render() {
                     )}
 
                     ${
-                      t.fixed
+                      t.fixed && !compraDe(t)
                         ? " 🔁"
                         : ""
                     }
+                    ${parcTag(t)}
 
                     ${
                       t.done
@@ -1529,6 +2270,45 @@ function render() {
               Nada lançado neste mês.
             </p>
           `
+      }
+
+      ${
+        carried(cur).length
+          ? `
+            <h2 style="margin-top:16px">
+              ⤵️ Pendentes trazidos de ${label(shift(cur, -1))}
+            </h2>
+            <p class="note">
+              Não entram nos totais nem no orçamento de ${label(cur)};
+              só na previsão de sobra e no fluxo.
+            </p>
+            ${[...carried(cur)]
+              .sort((x, y) => x.date.localeCompare(y.date))
+              .map(t => `
+                <div class="li pend">
+                  <div>
+                    ${ICON[t.kind] || "💸"}
+                    ${esc(t.desc || t.cat || "Sem descrição")}
+                    ${parcTag(t)}
+                    <span class="tag late">de ${label(monthOf(t))}</span>
+                    <br>
+                    <small>
+                      venceu ${dm(t.date)}
+                      · ${esc(t.cat || "Outros")}
+                      · ${esc(t.by || "—")}
+                    </small>
+                  </div>
+
+                  <div class="row">
+                    <b class="${t.type === "out" ? "out" : "in"}">
+                      ${t.type === "out" ? "-" : "+"}${R(t.value)}
+                    </b>
+                    ${payBtn(t)}
+                  </div>
+                </div>
+              `).join("")}
+          `
+          : ""
       }
     </div>
 
@@ -1612,6 +2392,33 @@ function render() {
 
 
   
+
+  bindTabs();
+
+  /* ---------- Trazer pendentes do mês anterior ---------- */
+
+  if ($("#cy")) {
+    $("#cy").onchange = async ev => {
+      const on = ev.target.checked;
+      const mes = cur;
+
+      ev.target.disabled = true;
+
+      try {
+        await atualizarConfig(c => {
+          c.carry = c.carry || {};
+
+          if (on) c.carry[mes] = true;
+          else delete c.carry[mes];
+        });
+      } catch (erro) {
+        console.error(erro);
+        alert("Não foi possível salvar no banco. Nada foi alterado.");
+      }
+
+      render();
+    };
+  }
 
   /* ---------- Alterar "Não mexer" ---------- */
 
@@ -3017,7 +3824,7 @@ async function entrarControle() {
    ========================================================= */
 (function () {
   const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
-  let prevCur = null, prevVals = [], prevIds = new Set(), hadForm = false;
+  let prevCur = null, prevTab = null, prevVals = [], prevIds = new Set(), hadForm = false;
 
   const parseBRL = s => {
     const m = /^(-?)R\$\s*([\d.]+),(\d{2})$/.exec((s || "").replace(/\u00a0/g, " ").trim());
@@ -3040,7 +3847,8 @@ async function entrarControle() {
 
     const first = prevCur === null;
     const monthChanged = !first && prevCur !== cur;
-    const enter = first || monthChanged;
+    const tabChanged = prevTab !== null && prevTab !== tab;
+    const enter = first || monthChanged || tabChanged;
     const dir = monthChanged ? (cur > prevCur ? "from-r" : "from-l") : "";
 
     // cards entram em sequência (só ao abrir e ao trocar de mês)
@@ -3085,6 +3893,7 @@ async function entrarControle() {
     if (nw && enter) nw.classList.add("pop");
 
     prevCur = cur;
+    prevTab = tab;
   }
 
   const baseRender = render;
