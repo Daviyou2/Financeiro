@@ -56,3 +56,68 @@ input:focus,select:focus{outline:2px solid var(--ac);outline-offset:1px}
 button:focus-visible{outline:2px solid var(--ac);outline-offset:2px}
 button:active{transform:scale(.97)}
 button:disabled,select:disabled{opacity:.5;cursor:not-allowed}
+
+/* =========================================================
+   ANIMAÇÕES
+   ========================================================= */
+:root{--ease:cubic-bezier(.22,1,.36,1);--spring:cubic-bezier(.34,1.56,.64,1)}
+html{-webkit-tap-highlight-color:transparent}
+button,input,select{transition:transform .2s var(--spring),background-color .2s,border-color .2s,box-shadow .2s,opacity .2s,filter .2s}
+button{overflow:hidden;touch-action:manipulation}
+button:not(.fab){position:relative}
+
+/* hover / toque */
+@media (hover:hover){
+  button:hover:not(:disabled){filter:brightness(1.08);transform:translateY(-1px)}
+  .card{transition:transform .3s var(--ease),box-shadow .3s var(--ease)}
+  .card:hover{transform:translateY(-2px);box-shadow:0 10px 26px rgba(0,0,0,.09)}
+  .fab:hover:not(:disabled){transform:scale(1.07)}
+}
+button:active:not(:disabled){transform:scale(.94);filter:none}
+input:focus,select:focus{box-shadow:0 0 0 4px color-mix(in srgb,var(--ac) 22%,transparent)}
+
+/* entrada dos cards (ao abrir e ao trocar de mês) */
+@keyframes rise{from{opacity:0;transform:translate(var(--dx,0),var(--dy,18px)) scale(.97)}to{opacity:1;transform:none}}
+.rise{animation:rise .6s var(--ease) backwards;animation-delay:calc(var(--i,0) * 70ms)}
+.rise.from-r{--dx:38px;--dy:0px}
+.rise.from-l{--dx:-38px;--dy:0px}
+
+/* barras enchendo */
+@keyframes grow{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+@keyframes growY{from{transform:scaleY(0)}to{transform:scaleY(1)}}
+.rise .bar .t i{transform-origin:left;animation:grow .9s var(--ease) backwards;animation-delay:calc(var(--i,0) * 70ms + 250ms)}
+.rise .cols b{transform-origin:bottom;animation:growY .9s var(--spring) backwards;animation-delay:calc(var(--i,0) * 70ms + 250ms)}
+
+/* números que mudam */
+@keyframes bump{40%{transform:scale(1.09)}}
+.bump{transform-origin:left center;animation:bump .55s var(--spring)}
+
+/* lançamento novo na lista */
+@keyframes fresh{
+  0%{opacity:0;transform:translateX(-26px);background:color-mix(in srgb,var(--ac) 24%,transparent)}
+  55%{opacity:1;transform:none;background:color-mix(in srgb,var(--ac) 16%,transparent)}
+  100%{background:transparent}
+}
+.li.fresh{animation:fresh 1s var(--ease) backwards}
+
+/* formulário e botão + */
+@keyframes pop{from{opacity:0;transform:translateY(26px) scale(.94)}to{opacity:1;transform:none}}
+#fm.pop,.lock{animation:pop .5s var(--spring) backwards}
+@keyframes fabIn{from{opacity:0;transform:scale(.3) rotate(-90deg)}to{opacity:1;transform:none}}
+.fab.pop{animation:fabIn .6s var(--spring) backwards .5s}
+
+/* aviso "Desfazer" */
+#toast{display:block;opacity:0;visibility:hidden;transform:translate(-50%,16px) scale(.96);transition:opacity .25s,transform .4s var(--spring),visibility 0s .4s}
+#toast.show{opacity:1;visibility:visible;transform:translate(-50%,0) scale(1);transition-delay:0s}
+
+/* onda ao tocar nos botões */
+@keyframes rip{to{transform:scale(1);opacity:0}}
+.rip{position:absolute;border-radius:50%;background:currentColor;opacity:.28;transform:scale(0);animation:rip .6s ease-out forwards;pointer-events:none}
+
+/* conta atrasada chama atenção, de leve */
+@keyframes late{0%{box-shadow:0 0 0 0 rgba(220,38,38,.45)}70%,100%{box-shadow:0 0 0 7px rgba(220,38,38,0)}}
+.tag.late{animation:late 2.2s ease-out infinite}
+
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.01ms!important;animation-delay:0s!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
+}

@@ -543,6 +543,15 @@ const balNow = () => {
  * R$ 400
  * R$ 200 para cada um.
  */
+const cents = x => Math.round(x * 100) / 100;
+
+/* Divide um valor meio a meio sem perder centavo. */
+const split = v => {
+  const a = Math.round(v * 50) / 100;
+
+  return [a, cents(v - a)];
+};
+
 const rule = m => {
   const keys = Object.keys(cfg.rules)
     .filter(x => x <= m)
@@ -550,22 +559,17 @@ const rule = m => {
 
   const k = keys.pop();
 
+  /* s = [pessoa 1, pessoa 2, Juntos]. Juntos é o orçamento total;
+     cada pessoa fica com metade dele. */
   if (k) {
-    const r = cfg.rules[k];
+    const b = Number(cfg.rules[k].b) || 0;
 
-    return {
-      b: Number(r.b) || 0,
-      s: [
-        Number(r.s?.[0]) || 0,
-        Number(r.s?.[1]) || 0,
-        Number(r.s?.[2]) || 0
-      ]
-    };
+    return { b, s: [...split(b), b] };
   }
 
   return {
     b: 400,
-    s: [200, 200, 0]
+    s: [200, 200, 400]
   };
 };
 
@@ -700,6 +704,16 @@ function month(m) {
     sp[1] +
     sp[2];
 
+  /* Gasto "Juntos" sai 50% de cada um. */
+  const j0 = Math.round(sp[2] * 50) / 100;
+  const j1 = cents(sp[2] - j0);
+
+  const pg = [
+    cents(sp[0] + j0),
+    cents(sp[1] + j1),
+    cents(spent)
+  ];
+
   const F = flow(m);
 
   /*
@@ -756,6 +770,7 @@ function month(m) {
     sobra,
     spent,
     sp,
+    pg,
     rest,
     left,
     prot,
@@ -1181,30 +1196,25 @@ function render() {
             N[1],
             "Juntos"
           ].map((name, i) => `
-            <tr>
+            <tr style="${i === 2 ? "font-weight:700" : ""}">
               <td>${esc(name)}</td>
 
-              <td>
-                ${R(M.r.s[i])}
-              </td>
+              <td>${R(M.r.s[i])}</td>
 
-              <td>
-                ${R(M.sp[i])}
-              </td>
+              <td>${R(M.pg[i])}</td>
 
-              <td
-                class="${
-                  M.r.s[i] - M.sp[i] < 0
-                    ? "out"
-                    : ""
-                }"
-              >
-                ${R(M.r.s[i] - M.sp[i])}
+              <td class="${cents(M.r.s[i] - M.pg[i]) < 0 ? "out" : ""}">
+                ${R(cents(M.r.s[i] - M.pg[i]))}
               </td>
             </tr>
           `).join("")
         }
       </table>
+
+      <p class="note">
+        "Juntos" é o orçamento total. Um gasto lançado em "Juntos"
+        sai 50% de cada um.
+      </p>
     </div>
 
 
@@ -1638,27 +1648,12 @@ function render() {
       return;
     }
 
-    /*
-     * Mantém a divisão entre os dois na mesma proporção.
-     */
-    const cents = x => Math.round(x * 100) / 100;
-
-    let s0, s1;
-
-    if (r.b > 0) {
-      s0 = cents(r.s[0] * b / r.b);
-      s1 = cents(r.s[1] * b / r.b);
-    } else {
-      s0 = cents(b / 2);
-      s1 = cents(b / 2);
-    }
-
     const mes = cur;
 
     try {
       await atualizarConfig(c => {
         c.rules = c.rules || {};
-        c.rules[mes] = {b, s: [s0, s1, cents(b - s0 - s1)]};
+        c.rules[mes] = {b, s: [...split(b), b]};
       });
     } catch (erro) {
       console.error(erro);
@@ -3016,5 +3011,99 @@ async function entrarControle() {
 
   await verificarControle();
 }
+
+/* =========================================================
+   ANIMAÇÕES (só visual: não mexe em dados nem em regras)
+   ========================================================= */
+(function () {
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  let prevCur = null, prevVals = [], prevIds = new Set(), hadForm = false;
+
+  const parseBRL = s => {
+    const m = /^(-?)R\$\s*([\d.]+),(\d{2})$/.exec((s || "").replace(/\u00a0/g, " ").trim());
+    return m ? (m[1] ? -1 : 1) * parseFloat(m[2].replace(/\./g, "") + "." + m[3]) : null;
+  };
+
+  function tween(el, from, to) {
+    const t0 = performance.now(), d = 700;
+    const step = t => {
+      const p = Math.min(1, (t - t0) / d), e = 1 - Math.pow(1 - p, 3);
+      el.textContent = R(p < 1 ? from + (to - from) * e : to);
+      if (p < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }
+
+  function polish() {
+    const root = document.getElementById("app");
+    if (!root || !root.querySelector(".card") || reduce) return;
+
+    const first = prevCur === null;
+    const monthChanged = !first && prevCur !== cur;
+    const enter = first || monthChanged;
+    const dir = monthChanged ? (cur > prevCur ? "from-r" : "from-l") : "";
+
+    // cards entram em sequência (só ao abrir e ao trocar de mês)
+    root.querySelectorAll(".card").forEach((c, i) => {
+      c.style.setProperty("--i", Math.min(i, 9));
+      if (enter) { c.classList.add("rise"); if (dir) c.classList.add(dir); }
+    });
+
+    // números: contam até o valor novo
+    const vals = [...root.querySelectorAll(".v")];
+    const now = vals.map(el => parseBRL(el.textContent));
+    vals.forEach((el, i) => {
+      const to = now[i];
+      if (to === null) return;
+      const from = enter || prevVals.length !== now.length ? 0 : prevVals[i];
+      if (from !== null && from !== to) {
+        el.classList.add("bump");
+        tween(el, from, to);
+      }
+    });
+    prevVals = now;
+
+    // lançamento novo desliza e brilha
+    const ids = new Set([...root.querySelectorAll("button[data-e]")].map(b => b.dataset.e));
+    if (!enter) {
+      ids.forEach(id => {
+        if (!prevIds.has(id)) {
+          const b = root.querySelector('button[data-e="' + id + '"]');
+          if (b && b.closest(".li")) b.closest(".li").classList.add("fresh");
+        }
+      });
+    }
+    prevIds = ids;
+
+    // formulário aparece com "pop"
+    const fm = document.getElementById("fm");
+    if (fm && !hadForm && !first) fm.classList.add("pop");
+    hadForm = !!fm;
+
+    // botão + entra girando
+    const nw = document.getElementById("nw");
+    if (nw && enter) nw.classList.add("pop");
+
+    prevCur = cur;
+  }
+
+  const baseRender = render;
+  render = function () {
+    baseRender.apply(this, arguments);
+    try { polish(); } catch (err) { console.warn("animação:", err); }
+  };
+
+  // onda ao tocar nos botões
+  document.addEventListener("pointerdown", ev => {
+    const b = ev.target.closest && ev.target.closest("button");
+    if (!b || b.disabled || reduce) return;
+    const r = b.getBoundingClientRect(), s = Math.max(r.width, r.height) * 2;
+    const sp = document.createElement("span");
+    sp.className = "rip";
+    sp.style.cssText = "width:" + s + "px;height:" + s + "px;left:" + (ev.clientX - r.left - s / 2) + "px;top:" + (ev.clientY - r.top - s / 2) + "px";
+    b.appendChild(sp);
+    sp.addEventListener("animationend", () => sp.remove());
+  }, {passive: true});
+})();
 
 iniciarSistema();
