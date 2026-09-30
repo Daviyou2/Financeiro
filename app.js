@@ -92,6 +92,9 @@ const num = (q, d) => {
   return isNaN(v) ? null : v;
 };
 
+const uuid = () => crypto.randomUUID ? crypto.randomUUID() :
+  "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => { const r = Math.random() * 16 | 0; return (c === "x" ? r : (r & 3 | 8)).toString(16); });
+
 const today = () => {
   const d = new Date();
 
@@ -198,6 +201,7 @@ const norm = t => {
     fixed: !!t.fixed,
 
     who: t.who || "",
+    membroId: t.membroId || null,
 
     recurrenceId: t.recurrenceId || null,
     recurrenceIndex: Number(t.recurrenceIndex) || 0,
@@ -208,14 +212,11 @@ const norm = t => {
 };
 
 let tx = [];
-
+let legacy = {tx: [], cfg: null}; // dados antigos, salvos só neste aparelho
 try {
-  tx = JSON.parse(
-    localStorage.getItem("fin_tx") || "[]"
-  ).map(norm);
-} catch {
-  tx = [];
-}
+  legacy.tx = JSON.parse(localStorage.getItem("fin_tx") || "[]").map(norm);
+  legacy.cfg = JSON.parse(localStorage.getItem("fin_cfg") || "null");
+} catch {}
 
 let cfg = {
   names: ["", ""],
@@ -224,14 +225,7 @@ let cfg = {
   rules: {}
 };
 
-try {
-  cfg = {
-    ...cfg,
-    ...JSON.parse(
-      localStorage.getItem("fin_cfg") || "{}"
-    )
-  };
-} catch {}
+
 
 if (!Array.isArray(cfg.names)) {
   cfg.names = ["", ""];
@@ -304,168 +298,60 @@ const saveUi = () => {
   );
 };
 
-const save = () => {
-  localStorage.setItem(
-    "fin_tx",
-    JSON.stringify(tx)
-  );
+const save = () => saveUi(); // neste aparelho só ficam mês e posição da tela
 
-  localStorage.setItem(
-    "fin_cfg",
-    JSON.stringify(cfg)
-  );
+const registroDe = t => ({
+  tipo: t.type === "in" ? "entrada" : "saida",
+  categoria: t.cat || "Outros",
+  descricao: t.desc || "",
+  valor: Number(t.value) || 0,
+  data: t.date,
+  pago: !!t.done,
+  pago_em: t.doneAt || null,
+  valor_previsto: t.planned == null ? null : Number(t.planned),
+  quem: t.by || "",
+  forma_pagamento: t.pay || "",
+  classificacao: t.cls === "casal" || t.cls === "protegido" ? t.cls : "normal",
+  tipo_lancamento: KINDS[t.kind] ? t.kind : "avulso",
+  recorrente: !!t.recurrenceId,
+  recorrencia_id: t.recurrenceId || null,
+  recorrencia_indice: t.recurrenceId ? (Number(t.recurrenceIndex) || 0) : null
+});
 
-  saveUi();
-};
-
-async function salvarLancamentoSupabase(t, manterId = false) {
-  if (!window.controleId || !window.membroId) {
-    throw new Error("Controle ou membro não identificado.");
-  }
-
-  const registro = {
+async function inserirLancamentos(list, manterId = false) {
+  if (!window.controleId || !window.membroId) throw new Error("Controle ou membro não identificado.");
+  const rows = list.map(t => ({
     controle_id: window.controleId,
-    membro_id: window.membroId,
-
-    tipo: t.type === "in"
-      ? "entrada"
-      : "saida",
-
-    categoria: t.cat || "Outros",
-    descricao: t.desc || "",
-    valor: Number(t.value) || 0,
-    data: t.date,
-
-    pago: !!t.done,
-
-    quem: t.by || "",
-    forma_pagamento: t.pay || "",
-
-    classificacao:
-      t.cls === "casal"
-        ? "casal"
-        : t.cls === "protegido"
-          ? "protegido"
-          : "normal",
-
-    tipo_lancamento:
-      t.kind === "entrada"
-        ? "entrada"
-        : t.kind === "fixa"
-          ? "fixa"
-          : t.kind === "recorrente"
-            ? "recorrente"
-            : "avulso",
-
-    recorrente: !!t.recurrenceId,
-
-    recorrencia_id:
-      t.recurrenceId || null,
-
-    recorrencia_indice:
-      Number.isInteger(t.recurrenceIndex)
-        ? t.recurrenceIndex
-        : null
-  };
-
-  if (manterId && t.id) {
-    registro.id = t.id;
-  }
-
-  const { data, error } =
-    await supabaseClient
-      .from("lancamentos")
-      .insert(registro)
-      .select()
-      .single();
-
-  if (error) {
-    console.error(
-      "Erro ao salvar lançamento:",
-      error
-    );
-
-    throw error;
-  }
-
+    membro_id: t.membroId || window.membroId,
+    ...registroDe(t),
+    ...(manterId && t.id ? {id: t.id} : {})
+  }));
+  const {data, error} = await supabaseClient.from("lancamentos").insert(rows).select();
+  if (error) { console.error("Erro ao salvar:", error); throw error; }
   return data;
 }
 
+const salvarLancamentoSupabase = async (t, manterId) => (await inserirLancamentos([t], manterId))[0];
+
+/* Configurações compartilhadas (orçamento, "Não mexer", saldo ajustado) ficam em controles.config.
+   Lê o valor mais recente, altera e grava, para um não apagar a mudança do outro. */
+async function atualizarConfig(mut) {
+  const {data, error} = await supabaseClient.from("controles").select("config").eq("id", window.controleId).single();
+  if (error) throw error;
+  const c = {rules: {}, adj: 0, ...(data.config || {})};
+  mut(c);
+  const r = await supabaseClient.from("controles").update({config: c}).eq("id", window.controleId).select("id");
+  if (r.error) throw r.error;
+  if (!r.data || !r.data.length) throw new Error("Banco bloqueou a gravação da configuração.");
+  cfg.rules = c.rules; cfg.adj = Number(c.adj) || 0; cfg.adjMonth = c.adjMonth;
+}
+
 async function atualizarLancamentoSupabase(t) {
-  if (!t.id) {
-    throw new Error("Lançamento sem ID.");
-  }
-
-  const registro = {
-    tipo:
-      t.type === "in"
-        ? "entrada"
-        : "saida",
-
-    categoria:
-      t.cat || "Outros",
-
-    descricao:
-      t.desc || "",
-
-    valor:
-      Number(t.value) || 0,
-
-    data:
-      t.date,
-
-    pago:
-      !!t.done,
-
-    quem:
-      t.by || "",
-
-    forma_pagamento:
-      t.pay || "",
-
-    classificacao:
-      t.cls === "casal"
-        ? "casal"
-        : t.cls === "protegido"
-          ? "protegido"
-          : "normal",
-
-    tipo_lancamento:
-      t.kind === "entrada"
-        ? "entrada"
-        : t.kind === "fixa"
-          ? "fixa"
-          : t.kind === "recorrente"
-            ? "recorrente"
-            : "avulso",
-
-    recorrente:
-      !!t.recurrenceId,
-
-    recorrencia_id:
-      t.recurrenceId || null,
-
-    recorrencia_indice:
-      Number.isInteger(t.recurrenceIndex)
-        ? t.recurrenceIndex
-        : null
-  };
-
-  const { error } =
-    await supabaseClient
-      .from("lancamentos")
-      .update(registro)
-      .eq("id", t.id)
-      .eq("controle_id", window.controleId);
-
-  if (error) {
-    console.error(
-      "Erro ao atualizar lançamento:",
-      error
-    );
-
-    throw error;
-  }
+  if (!t.id) throw new Error("Lançamento sem ID.");
+  const {data, error} = await supabaseClient.from("lancamentos").update(registroDe(t))
+    .eq("id", t.id).eq("controle_id", window.controleId).select("id");
+  if (error) { console.error(error); throw error; }
+  if (!data || !data.length) throw new Error("Nenhum registro foi atualizado (permissão do banco?).");
 }
 
 async function excluirLancamentoSupabase(id) {
@@ -496,125 +382,79 @@ async function excluirLancamentoSupabase(id) {
 }
 
 async function atualizarStatusSupabase(t) {
-
-  if (!t.id) {
-    throw new Error("Lançamento sem ID.");
-  }
-
-  const { error } =
-    await supabaseClient
-      .from("lancamentos")
-      .update({
-        pago: !!t.doneAt,
-        valor: Number(t.value) || 0
-      })
-      .eq("id", t.id)
-      .eq("controle_id", window.controleId);
-
-  if (error) {
-
-    console.error(
-      "Erro ao atualizar status:",
-      error
-    );
-
-    throw error;
-  }
+  if (!t.id) throw new Error("Lançamento sem ID.");
+  const {data, error} = await supabaseClient.from("lancamentos").update({
+    pago: !!t.done, pago_em: t.doneAt || null,
+    valor: Number(t.value) || 0,
+    valor_previsto: t.planned == null ? null : Number(t.planned)
+  }).eq("id", t.id).eq("controle_id", window.controleId).select("id");
+  if (error) { console.error(error); throw error; }
+  if (!data || !data.length) throw new Error("Nenhum registro foi atualizado (permissão do banco?).");
 }
 
 async function carregarLancamentosSupabase() {
-  if (!window.controleId) {
-    tx = [];
-    return;
-  }
+  if (!window.controleId) { tx = []; return false; }
+  const [lan, mem, ctl] = await Promise.all([
+    supabaseClient.from("lancamentos").select("*").eq("controle_id", window.controleId).order("data", {ascending: true}),
+    supabaseClient.from("membros").select("id,nome").eq("controle_id", window.controleId).order("id"),
+    supabaseClient.from("controles").select("config").eq("id", window.controleId).maybeSingle()
+  ]);
+  if (lan.error) { console.error(lan.error); toast("⚠️ Não foi possível carregar do banco"); return false; }
+  if (ctl.error) console.error("Falta rodar o SQL de configuração?", ctl.error);
 
-  const { data, error } = await supabaseClient
-    .from("lancamentos")
-    .select("*")
-    .eq("controle_id", window.controleId)
-    .order("data", { ascending: true });
+  /* Nomes e "quem sou eu" vêm dos membros do controle (mesmos nos dois celulares). */
+  const nomes = {};
+  (mem.data || []).forEach(m => nomes[m.id] = m.nome);
+  const lista = (mem.data || []).map(m => m.nome);
+  cfg.names = [lista[0] || "Pessoa 1", lista[1] || "Pessoa 2"];
+  cfg.me = nomes[window.membroId] || cfg.names[0];
 
-  if (error) {
-    console.error(
-      "Erro ao carregar lançamentos:",
-      error
-    );
+  const c = ctl.data?.config || {};
+  cfg.rules = c.rules || {};
+  cfg.adj = Number(c.adj) || 0;
+  cfg.adjMonth = c.adjMonth;
 
-    alert(
-      "Não foi possível carregar os lançamentos."
-    );
-
-    return;
-  }
-
-  tx = (data || []).map(t => ({
-    id:
-      t.id,
-
-    type:
-      t.tipo === "entrada"
-        ? "in"
-        : "out",
-
-    kind:
-      t.tipo_lancamento ||
-      "avulso",
-
-    desc:
-      t.descricao ||
-      "",
-
-    value:
-      Number(t.valor) ||
-      0,
-
-    cat:
-      t.categoria ||
-      "Outros",
-
-    by:
-      t.quem ||
-      "",
-
-    pay:
-      t.forma_pagamento ||
-      "",
-
-    cls:
-      t.classificacao ||
-      "normal",
-
-    date:
-      t.data,
-
-    done:
-      !!t.pago,
-
-    fixed:
-      !!t.recorrente,
-
-    who:
-      t.quem ||
-      "",
-
-    recurrenceId:
-      t.recorrencia_id ||
-      null,
-
-    recurrenceIndex:
-      Number.isInteger(
-        t.recorrencia_indice
-      )
-        ? t.recorrencia_indice
-        : 0
+  tx = (lan.data || []).map(t => norm({
+    id: t.id,
+    type: t.tipo === "entrada" ? "in" : "out",
+    kind: t.tipo_lancamento,
+    desc: t.descricao,
+    value: t.valor,
+    cat: t.categoria,
+    by: t.quem,
+    pay: t.forma_pagamento,
+    cls: t.classificacao,
+    date: t.data,
+    done: !!t.pago,
+    doneAt: t.pago ? t.pago_em : null,
+    planned: t.valor_previsto,
+    fixed: !!t.recorrente,
+    who: nomes[t.membro_id] || "",
+    membroId: t.membro_id,
+    recurrenceId: t.recorrencia_id,
+    recurrenceIndex: t.recorrencia_indice
   }));
-
-  console.log(
-    "Lançamentos carregados do Supabase:",
-    tx.length
-  );
+  return true;
 }
 
+/* Os dois celulares se atualizam: tempo real + ao voltar para o app + a cada 30 s. */
+let canal = null, recarregando = false;
+async function recarregar() {
+  if (recarregando || !window.controleId || editId || showForm) return;
+  recarregando = true;
+  try { if (await carregarLancamentosSupabase()) render(); } finally { recarregando = false; }
+}
+function assinarTempoReal() {
+  if (canal) supabaseClient.removeChannel(canal);
+  const f = "controle_id=eq." + window.controleId;
+  canal = supabaseClient.channel("controle-" + window.controleId)
+    .on("postgres_changes", {event: "*", schema: "public", table: "lancamentos", filter: f}, recarregar)
+    .on("postgres_changes", {event: "*", schema: "public", table: "membros", filter: f}, recarregar)
+    .on("postgres_changes", {event: "*", schema: "public", table: "controles", filter: "id=eq." + window.controleId}, recarregar)
+    .subscribe();
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden) recarregar(); });
+setInterval(recarregar, 30000);
 
 /* =========================================================
    NOMES
@@ -1201,15 +1041,7 @@ function render() {
     </div>
 
 
-    <div class="row top">
-      <span class="note">
-        Lançando como
-      </span>
-
-      <select id="me" style="flex:0">
-        ${opt(N, cfg.me)}
-      </select>
-    </div>
+    <div class="row top"><span class="note">Lançando como <b>${esc(cfg.me)}</b></span></div>
 
 
 
@@ -1691,6 +1523,10 @@ function render() {
     </div>
 
 
+    ${legacy.tx.length ? `<div class="card"><h2>📦 Dados só neste aparelho</h2>
+      <p class="note">Achei ${legacy.tx.length} lançamentos da versão antiga, salvos apenas neste navegador. Envie para o banco para aparecerem nos dois celulares.</p>
+      <div class="row"><button id="lgs">Enviar para o banco</button><button class="g" id="lgd">Descartar</button></div></div>` : ""}
+
     <!-- BACKUP -->
 
     <div class="card">
@@ -1699,9 +1535,7 @@ function render() {
       </h2>
 
       <p class="note">
-        Os dados ficam salvos neste navegador.
-        Use Exportar para guardar uma cópia ou
-        transferir os dados para outro aparelho.
+        Os dados ficam no banco online, iguais nos dois celulares. Exportar baixa uma cópia; Importar adiciona ao banco os lançamentos de um arquivo.
       </p>
 
       <div class="row">
@@ -1735,7 +1569,7 @@ function render() {
 
       <div class="row">
         <button class="g" id="copiarCodigo">📋 Copiar código</button>
-        <button class="g" id="nm">✏️ Alterar nomes</button>
+        <button class="g" id="nm">✏️ Alterar meu nome</button>
       </div>
 
       <div class="row" style="margin-top:8px">
@@ -1767,17 +1601,11 @@ function render() {
   };
 
 
-  /* ---------- Quem está lançando ---------- */
-
-  $("#me").onchange = ev => {
-    cfg.me = ev.target.value;
-    save();
-  };
-
+  
 
   /* ---------- Alterar "Não mexer" ---------- */
 
-  $("#eb").onclick = () => {
+  $("#eb").onclick = async () => {
     const r = M.r;
 
     const v = num(
@@ -1825,23 +1653,26 @@ function render() {
       s1 = cents(b / 2);
     }
 
-    cfg.rules[cur] = {
-      b,
-      s: [
-        s0,
-        s1,
-        cents(b - s0 - s1)
-      ]
-    };
+    const mes = cur;
 
-    save();
+    try {
+      await atualizarConfig(c => {
+        c.rules = c.rules || {};
+        c.rules[mes] = {b, s: [s0, s1, cents(b - s0 - s1)]};
+      });
+    } catch (erro) {
+      console.error(erro);
+      alert("Não foi possível salvar no banco. Nada foi alterado.");
+      return;
+    }
+
     render();
   };
 
 
   /* ---------- Ajustar saldo ---------- */
 
-  $("#sb").onclick = () => {
+  $("#sb").onclick = async () => {
     const atual = balNow();
 
     const v = num(
@@ -1853,10 +1684,19 @@ function render() {
       return;
     }
 
-    cfg.adj += v - atual;
-    cfg.adjMonth = cur;
+    const mes = cur;
 
-    save();
+    try {
+      await atualizarConfig(c => {
+        c.adj = (Number(c.adj) || 0) + (v - atual);
+        c.adjMonth = mes;
+      });
+    } catch (erro) {
+      console.error(erro);
+      alert("Não foi possível salvar no banco. Nada foi alterado.");
+      return;
+    }
+
     render();
   };
 
@@ -1917,6 +1757,8 @@ function render() {
         return;
       }
 
+$("#ad").disabled = true;
+
       const type =
         kind === "entrada"
           ? "in"
@@ -1973,23 +1815,13 @@ function render() {
 
       if (item) {
 
-        Object.assign(
-          item,
-          base
-        );
-
-        /*
-        * Mantém o fato de ser uma
-        * recorrência antiga.
-        */
-        item.fixed =
-          item.fixed || false;
+        const copia = {...item, ...base};
+        if (copia.done && !item.done) copia.doneAt = today();
+        if (!copia.done) copia.doneAt = null;
 
         try {
-
-          await atualizarLancamentoSupabase(
-            item
-          );
+          await atualizarLancamentoSupabase(copia);
+          Object.assign(item, copia);
 
         } catch (erro) {
 
@@ -1999,8 +1831,9 @@ function render() {
           );
 
           alert(
-            "Não foi possível salvar a alteração no Supabase."
+            "Não foi possível salvar a alteração.\n\n" + (erro?.message || "")
           );
+          $("#ad").disabled = false;
 
           return;
         }
@@ -2029,87 +1862,30 @@ function render() {
           : 1;
 
 
-      const groupId =
-        Date.now().toString(36) +
-        Math.random()
-          .toString(36)
-          .slice(2, 7);
+      const groupId = repeat ? uuid() : null;
 
-
-      const novosLancamentos = [];
+      const novos = [];
 
       for (let k = 0; k < total; k++) {
-
-        const novo = {
-          id:
-            groupId +
-            "-" +
-            k,
-
+        novos.push({
           ...base,
-
-          date:
-            addMonths(
-              date,
-              k
-            ),
-
-          done:
-            k === 0
-              ? base.done
-              : false,
-
-          fixed:
-            repeat,
-
-          recurrenceId:
-            repeat
-              ? groupId
-              : null,
-
-          recurrenceIndex:
-            repeat
-              ? k
-              : 0
-        };
-
-        tx.push(novo);
-
-        novosLancamentos.push(novo);
+          date: addMonths(date, k),
+          done: k === 0 ? base.done : false,
+          fixed: repeat,
+          recurrenceId: groupId,
+          recurrenceIndex: repeat ? k : 0
+        });
       }
 
-
-      /* ---------- Salvar no Supabase ---------- */
-
+      /* Só aparece na tela se o banco confirmou. */
       try {
-
-        for (const lancamento of novosLancamentos) {
-
-          const salvo =
-            await salvarLancamentoSupabase(
-              lancamento
-            );
-
-          /*
-          * O Supabase gera o UUID.
-          * Usamos esse ID no tx também.
-          */
-          if (salvo?.id) {
-            lancamento.id = salvo.id;
-          }
-        }
-
+        await inserirLancamentos(novos);
+        await carregarLancamentosSupabase();
       } catch (erro) {
-
-        console.error(
-          "Erro ao sincronizar com Supabase:",
-          erro
-        );
-
-        alert(
-          "O lançamento foi criado localmente, mas não foi possível sincronizar com o Supabase."
-        );
-
+        console.error(erro);
+        alert("Não foi possível salvar no banco. O lançamento NÃO foi criado.\n\n" + (erro?.message || ""));
+        $("#ad").disabled = false;
+        return;
       }
 
       showForm = false;
@@ -2223,10 +1999,11 @@ function render() {
             erro
           );
 
-          t.doneAt = null;
+          await carregarLancamentosSupabase();
+          render();
 
           alert(
-            "Não foi possível sincronizar o status."
+            "Não foi possível sincronizar o status.\n\n" + (erro?.message || "")
           );
 
           return;
@@ -2364,38 +2141,33 @@ function render() {
   };
 
 
-  /* ---------- Alterar nomes ---------- */
+  /* ---------- Alterar meu nome ---------- */
 
-  $("#nm").onclick = () => {
-    const old = [...cfg.names];
+  $("#nm").onclick = async () => {
+    const velho = cfg.me;
+    const novo = (prompt("Seu nome", velho) || "").trim();
+    if (!novo || novo === velho) return;
 
-    const a = (prompt("Nome da pessoa 1", old[0]) || "").trim();
-    if (!a) return;
+    const outro = cfg.names.find(n => n !== velho) || "";
 
-    const b = (prompt("Nome da pessoa 2", old[1]) || "").trim();
-    if (!b) return;
-
-    if (
-      a.toLowerCase() === b.toLowerCase() ||
-      a.toLowerCase() === "juntos" ||
-      b.toLowerCase() === "juntos"
-    ) {
-      alert("Use dois nomes diferentes (e que não sejam “Juntos”).");
+    if (novo.toLowerCase() === "juntos" || novo.toLowerCase() === outro.toLowerCase()) {
+      alert("Use um nome diferente do outro e que não seja “Juntos”.");
       return;
     }
 
-    const map = { [old[0]]: a, [old[1]]: b };
+    const {data, error} = await supabaseClient.from("membros")
+      .update({nome: novo}).eq("id", window.membroId).select("id");
 
-    tx.forEach(t => {
-      if (map[t.by]) t.by = map[t.by];
-      if (map[t.who]) t.who = map[t.who];
-    });
+    if (error || !data?.length) {
+      console.error(error);
+      alert("Não foi possível alterar o nome.");
+      return;
+    }
 
-    if (map[cfg.me]) cfg.me = map[cfg.me];
+    await supabaseClient.from("lancamentos").update({quem: novo})
+      .eq("controle_id", window.controleId).eq("quem", velho);
 
-    cfg.names = [a, b];
-
-    save();
+    await carregarLancamentosSupabase();
     render();
   };
 
@@ -2416,6 +2188,31 @@ function render() {
 
 
   /* ---------- Exportar ---------- */
+
+  if ($("#lgs")) $("#lgs").onclick = async () => {
+    try {
+      await inserirLancamentos(legacy.tx.map(t => ({...t, id: null, membroId: null, recurrenceId: null, recurrenceIndex: 0})));
+      const c = legacy.cfg;
+      if (c) await atualizarConfig(n => {
+        n.rules = {...(c.rules || {}), ...(n.rules || {})};
+        if (!n.adj && c.adj) { n.adj = Number(c.adj) || 0; n.adjMonth = c.adjMonth; }
+      });
+      localStorage.removeItem("fin_tx"); localStorage.removeItem("fin_cfg");
+      legacy = {tx: [], cfg: null};
+      await carregarLancamentosSupabase();
+      render();
+      toast("✅ Enviado para o banco");
+    } catch (erro) {
+      console.error(erro);
+      alert("Não foi possível enviar. Nada foi apagado deste aparelho.");
+    }
+  };
+  if ($("#lgd")) $("#lgd").onclick = () => {
+    if (!confirm("Descartar os dados antigos deste aparelho?")) return;
+    localStorage.removeItem("fin_tx"); localStorage.removeItem("fin_cfg");
+    legacy = {tx: [], cfg: null};
+    render();
+  };
 
   $("#ex").onclick = () => {
     const data = {
@@ -2498,47 +2295,14 @@ function render() {
           );
         }
 
-        if (
-          !confirm(
-            "Isso vai substituir os lançamentos deste aparelho. Continuar?"
-          )
-        ) {
-          return;
-        }
+        if (!confirm("Isso vai ADICIONAR " + list.length + " lançamentos ao banco compartilhado (nada será apagado). Continuar?")) return;
 
-        tx =
-          list.map(norm);
-
-        if (
-          data.cfg &&
-          typeof data.cfg === "object"
-        ) {
-          cfg = {
-            ...cfg,
-            ...data.cfg,
-            rules:
-              data.cfg.rules || {}
-          };
-        }
-
-        if (
-          data.ui?.cur &&
-          /^\d{4}-\d{2}$/.test(
-            data.ui.cur
-          )
-        ) {
-          cur = data.ui.cur;
-        }
-
-        ensureNames();
-
-        save();
-
-        render();
-
-        toast(
-          "✅ Dados importados com sucesso"
+        await inserirLancamentos(
+          list.map(norm).map(t => ({...t, id: null, membroId: null, recurrenceId: null, recurrenceIndex: 0}))
         );
+        await carregarLancamentosSupabase();
+        render();
+        toast("✅ Dados enviados para o banco");
 
       } catch (err) {
         console.error(err);
@@ -2601,7 +2365,7 @@ async function reverter(id) {
     t.planned = plannedAnterior;
 
     alert(
-      "Não foi possível sincronizar a alteração."
+      "Não foi possível sincronizar a alteração.\n\n" + (erro?.message || "")
     );
 
     return;
@@ -2816,6 +2580,7 @@ async function start() {
    * do controle atual no Supabase.
    */
   await carregarLancamentosSupabase();
+  assinarTempoReal();
 
 
   render();
