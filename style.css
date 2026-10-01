@@ -202,3 +202,55 @@ input:focus,select:focus{box-shadow:0 0 0 4px color-mix(in srgb,var(--ac) 22%,tr
 [data-theme="cinna"] .hero .v,[data-theme="cinna"] .hero .k{text-shadow:0 1px 2px rgba(20,70,120,.35)}
 [data-theme="cinna"] .hero .g3>div{background:rgba(255,255,255,.28)}
 [data-theme="cinna"] button:not(.g):not(.th):not(.nav button){background:linear-gradient(135deg,#3fa7e6,#6bbcf0)}
+
+/* =========================================================
+   CINNAMOROLL CAFÉ: caixinha principal
+   ========================================================= */
+.e2,.cup{display:none}
+
+[data-theme="cinna"] .card.hero{padding-top:54px}
+
+/* toldo listrado com babado */
+[data-theme="cinna"] .hero::before{
+  content:"";position:absolute;left:0;right:0;top:0;height:40px;z-index:2;pointer-events:none;
+  background:
+    radial-gradient(circle at 14px 0,#8fd0f7 13.5px,transparent 14px) 0 22px/56px 16px repeat-x,
+    radial-gradient(circle at 42px 0,#fff 13.5px,transparent 14px) 0 22px/56px 16px repeat-x,
+    repeating-linear-gradient(90deg,#8fd0f7 0 28px,#fff 28px 56px) 0 0/100% 24px no-repeat;
+  filter:drop-shadow(0 3px 2px rgba(20,70,120,.28))
+}
+[data-theme="cinna"] .hero::after{top:auto;bottom:-10px;right:-8px}
+
+/* placa da cafeteria */
+[data-theme="cinna"] .hero h2{display:inline-block;background:rgba(255,255,255,.94);color:#2f4b66;border-radius:999px;padding:3px 14px;text-shadow:none;margin-bottom:10px;box-shadow:0 2px 6px rgba(20,70,120,.18)}
+[data-theme="cinna"] .hero .e1{display:none}
+[data-theme="cinna"] .hero .e2{display:inline}
+
+/* xícara fumegando */
+[data-theme="cinna"] .hero>.cup{display:block;position:absolute;right:18px;top:58px;font-size:40px;line-height:1;z-index:1}
+.cup::before,.cup::after{content:"";position:absolute;bottom:68%;left:12px;width:6px;height:6px;border-radius:50%;background:rgba(255,255,255,.9);animation:steam 2.6s ease-in infinite}
+.cup::after{left:26px;animation-delay:1.2s}
+@keyframes steam{from{transform:translateY(0) scale(.6);opacity:0}30%{opacity:.9}to{transform:translateY(-24px) scale(1.5);opacity:0}}
+
+/* "cardápio": blocos de papel com borda pontilhada */
+[data-theme="cinna"] .hero .g3>div{background:rgba(255,255,255,.92);border:2px dashed #a9d8f5;border-radius:12px;padding:8px 10px;text-shadow:none}
+[data-theme="cinna"] .hero .g3>div .k{color:var(--mut);text-shadow:none}
+[data-theme="cinna"] .hero .g3>div .v{color:var(--tx);text-shadow:none}
+[data-theme="cinna"] .hero .g3>div .v.in{color:var(--in)}
+[data-theme="cinna"] .hero .g3>div .v.out{color:var(--out)}
+
+/* nota como recibo */
+[data-theme="cinna"] .hero .note{border-top:2px dashed rgba(255,255,255,.7);padding-top:8px;margin-top:12px}
+
+/* =========================================================
+   SPRITES FOFINHOS (originais) NOS CARDS DO TEMA CINNAMOROLL
+   ========================================================= */
+[data-theme="cinna"] .card:not(.hero):not(#fm){position:relative}
+[data-theme="cinna"] .card:not(.hero) h2{padding-right:46px}
+[data-theme="cinna"] .card:not(.hero)::after{content:"";position:absolute;right:10px;top:-14px;width:44px;height:44px;pointer-events:none;background-repeat:no-repeat;background-size:contain;filter:drop-shadow(0 2px 2px rgba(63,140,200,.25));animation:bob 3.6s ease-in-out infinite}
+[data-theme="cinna"] .card[data-sp="0"]:not(.hero)::after{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Ccircle cx='17' cy='28' r='9' fill='%23fff' stroke='%238ec9f0' stroke-width='2'/%3E%3Ccircle cx='28' cy='22' r='11' fill='%23fff' stroke='%238ec9f0' stroke-width='2'/%3E%3Ccircle cx='37' cy='29' r='8' fill='%23fff' stroke='%238ec9f0' stroke-width='2'/%3E%3Crect x='17' y='27' width='20' height='10' fill='%23fff'/%3E%3Cpath d='M12 37h31' stroke='%238ec9f0' stroke-width='2' stroke-linecap='round'/%3E%3Ccircle cx='22' cy='28' r='1.7' fill='%233b5670'/%3E%3Ccircle cx='34' cy='28' r='1.7' fill='%233b5670'/%3E%3Cellipse cx='18' cy='32' rx='2.6' ry='1.6' fill='%23ffb3cc'/%3E%3Cellipse cx='38' cy='32' rx='2.6' ry='1.6' fill='%23ffb3cc'/%3E%3Cpath d='M26 31 q2 2.6 4 0' stroke='%233b5670' stroke-width='1.3' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");animation-delay:-0.0s}
+[data-theme="cinna"] .card[data-sp="1"]:not(.hero)::after{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cpath d='M12 20h24v10a11 11 0 0 1-11 11h-2a11 11 0 0 1-11-11z' fill='%23fff' stroke='%238ec9f0' stroke-width='2'/%3E%3Cpath d='M36 23h3a4 4 0 0 1 0 9h-4' fill='none' stroke='%238ec9f0' stroke-width='2'/%3E%3Cpath d='M14 20h20' stroke='%23d9a77a' stroke-width='3' stroke-linecap='round'/%3E%3Cpath d='M19 14q-2-3 0-5M26 14q-2-3 0-5' fill='none' stroke='%23b9dff7' stroke-width='2' stroke-linecap='round'/%3E%3Ccircle cx='18' cy='28' r='1.7' fill='%233b5670'/%3E%3Ccircle cx='30' cy='28' r='1.7' fill='%233b5670'/%3E%3Cellipse cx='14' cy='32' rx='2.6' ry='1.6' fill='%23ffb3cc'/%3E%3Cellipse cx='34' cy='32' rx='2.6' ry='1.6' fill='%23ffb3cc'/%3E%3Cpath d='M22 31 q2 2.6 4 0' stroke='%233b5670' stroke-width='1.3' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");animation-delay:-0.7s}
+[data-theme="cinna"] .card[data-sp="2"]:not(.hero)::after{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cpath d='M6 32c2-14 12-20 18-20s16 6 18 20c-5-3-8-1-9 3-3-5-6-5-9 0-3-5-6-5-9 0-1-4-4-6-9-3z' fill='%23f4c882' stroke='%23d99a4e' stroke-width='2' stroke-linejoin='round'/%3E%3Cpath d='M16 17l4 11M24 14v14M32 17l-4 11' stroke='%23d99a4e' stroke-width='1.6' stroke-linecap='round'/%3E%3Ccircle cx='18' cy='31' r='1.7' fill='%233b5670'/%3E%3Ccircle cx='30' cy='31' r='1.7' fill='%233b5670'/%3E%3Cellipse cx='14' cy='35' rx='2.6' ry='1.6' fill='%23ffb3cc'/%3E%3Cellipse cx='34' cy='35' rx='2.6' ry='1.6' fill='%23ffb3cc'/%3E%3Cpath d='M22 34 q2 2.6 4 0' stroke='%233b5670' stroke-width='1.3' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");animation-delay:-1.4s}
+[data-theme="cinna"] .card[data-sp="3"]:not(.hero)::after{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cpath d='M12 28h24l-3 14H15z' fill='%238fd0f7' stroke='%236fb6e4' stroke-width='2' stroke-linejoin='round'/%3E%3Cpath d='M11 28c-2-7 5-9 6-13 3-5 10-5 13 0 1 4 8 6 7 13z' fill='%23ffc4d9' stroke='%23f59ab9' stroke-width='2' stroke-linejoin='round'/%3E%3Ccircle cx='24' cy='11' r='3' fill='%23ef6b8d'/%3E%3Ccircle cx='18' cy='24' r='1.7' fill='%233b5670'/%3E%3Ccircle cx='30' cy='24' r='1.7' fill='%233b5670'/%3E%3Cellipse cx='14' cy='28' rx='2.6' ry='1.6' fill='%23ffb3cc'/%3E%3Cellipse cx='34' cy='28' rx='2.6' ry='1.6' fill='%23ffb3cc'/%3E%3Cpath d='M22 27 q2 2.6 4 0' stroke='%233b5670' stroke-width='1.3' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");animation-delay:-2.0999999999999996s}
+[data-theme="cinna"] .card[data-sp="4"]:not(.hero)::after{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cpath d='M24 5l5.5 11.5 12.5 1.7-9.2 8.8 2.3 12.4L24 33l-11.1 6.4 2.3-12.4L6 18.2l12.5-1.7z' fill='%23ffe08a' stroke='%23f5c04a' stroke-width='2' stroke-linejoin='round'/%3E%3Ccircle cx='18' cy='21' r='1.7' fill='%233b5670'/%3E%3Ccircle cx='30' cy='21' r='1.7' fill='%233b5670'/%3E%3Cellipse cx='14' cy='25' rx='2.6' ry='1.6' fill='%23ffb3cc'/%3E%3Cellipse cx='34' cy='25' rx='2.6' ry='1.6' fill='%23ffb3cc'/%3E%3Cpath d='M22 24 q2 2.6 4 0' stroke='%233b5670' stroke-width='1.3' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");animation-delay:-2.8s}
+@keyframes bob{50%{transform:translateY(-3px)}}

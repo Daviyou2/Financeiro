@@ -1825,7 +1825,9 @@ function render() {
     <!-- SITUAÇÃO -->
 
     <div class="card hero" data-s="mes">
-      <h2>💰 Situação do mês</h2>
+      <h2><span class="e1">💰</span><span class="e2">☕</span> Situação do mês</h2>
+
+      <div class="cup" aria-hidden="true">☕</div>
 
       <div class="k">
         Saldo disponível agora
@@ -3964,6 +3966,7 @@ async function entrarControle() {
   const baseRender = render;
   render = function () {
     baseRender.apply(this, arguments);
+    document.querySelectorAll("#app .card").forEach((c, i) => { c.dataset.sp = i % 5; });
     try { polish(); } catch (err) { console.warn("animação:", err); }
   };
 
