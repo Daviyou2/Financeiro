@@ -259,7 +259,7 @@ let cur =
 let editId = null;
 let showForm = false;
 let cardForm = false;
-let tab = ui.tab === "cartoes" ? "cartoes" : "mes";
+let tab = ["cartoes", "resumo", "ajustes"].includes(ui.tab) ? ui.tab : "mes";
 
 
 /* ---------- Desfazer ---------- */
@@ -866,13 +866,48 @@ const dividirParcelas = (v, n, modo) => {
 };
 
 
-/* ---------- Abas ---------- */
+/* ---------- Abas (barra fixa embaixo) ---------- */
+
+/* ---------- Temas (salvos só neste aparelho) ---------- */
+
+const THEMES = [
+  ["auto", "Padrão", "linear-gradient(135deg,#0f766e,#1b1f24)"],
+  ["claro", "Claro", "linear-gradient(135deg,#fff,#d1d5db)"],
+  ["escuro", "Escuro", "linear-gradient(135deg,#1a1f26,#2dd4bf)"],
+  ["cinna", "Cinnamoroll ☁️", "linear-gradient(135deg,#cfeaff,#4fb3ec 60%,#ffd1e1)"],
+  ["sakura", "Sakura 🌸", "linear-gradient(135deg,#ffe3ec,#e0719a)"]
+];
+
+const themeNow = () => {
+  try { return localStorage.getItem("fin_theme") || "auto"; } catch { return "auto"; }
+};
+
+const applyTheme = t => { document.documentElement.dataset.theme = t; };
+
+function setTheme(t) {
+  try { localStorage.setItem("fin_theme", t); } catch {}
+
+  applyTheme(t);
+  render();
+}
+
+applyTheme(themeNow());
+
+const TABS = [
+  ["mes", "📅", "Mês"],
+  ["cartoes", "💳", "Cartões"],
+  ["resumo", "📊", "Resumo"],
+  ["ajustes", "⚙️", "Ajustes"]
+];
 
 const tabsHtml = () => `
-  <div class="tabs">
-    <button id="tb1" class="g ${tab === "mes" ? "on" : ""}">📅 Mês</button>
-    <button id="tb2" class="g ${tab === "cartoes" ? "on" : ""}">💳 Cartões</button>
-  </div>
+  <nav class="nav">
+    ${TABS.map(([k, i, l]) => `
+      <button data-go="${k}" class="${tab === k ? "on" : ""}">
+        <span>${i}</span>${l}
+      </button>
+    `).join("")}
+  </nav>
 `;
 
 function setTab(t) {
@@ -889,8 +924,9 @@ function setTab(t) {
 }
 
 function bindTabs() {
-  $("#tb1").onclick = () => setTab("mes");
-  $("#tb2").onclick = () => setTab("cartoes");
+  document.querySelectorAll(".nav button").forEach(b => {
+    b.onclick = () => setTab(b.dataset.go);
+  });
 }
 
 
@@ -1038,6 +1074,7 @@ async function excluirParcelamento(rid) {
 /* ---------- Tela ---------- */
 
 function renderCartoes() {
+  $("#app").dataset.tab = "cartoes";
   const td = today();
   const cm = currentMonth();
   const N = cfg.names;
@@ -1502,6 +1539,7 @@ function renderCartoes() {
    ========================================================= */
 
 function render() {
+  $("#app").dataset.tab = tab;
   if (tab === "cartoes") { renderCartoes(); return; }
 
   const M = month(cur);
@@ -1786,7 +1824,7 @@ function render() {
 
     <!-- SITUAÇÃO -->
 
-    <div class="card">
+    <div class="card hero" data-s="mes">
       <h2>💰 Situação do mês</h2>
 
       <div class="k">
@@ -1904,12 +1942,19 @@ function render() {
 
     <!-- ORÇAMENTO -->
 
-    <div class="card">
+    <div class="card" data-s="mes">
       <h2>🛒 Quanto podemos gastar</h2>
 
       <div class="v big ${M.rest < 0 ? "out" : ""}">
         ${R(M.rest)}
       </div>
+
+      ${(() => {
+        const pct = M.r.b > 0 ? M.spent / M.r.b * 100 : (M.spent > 0 ? 100 : 0);
+        const col = pct < 70 ? "var(--in)" : pct < 90 ? "#f59e0b" : "var(--out)";
+
+        return `<div class="meter" title="${Math.round(pct)}% do orçamento"><i style="width:${Math.min(100, pct)}%;background:${col}"></i></div>`;
+      })()}
 
       <p class="note">
         ${
@@ -1963,7 +2008,7 @@ function render() {
 
     <!-- FLUXO -->
 
-    <div class="card">
+    <div class="card" data-s="mes">
       <h2>
         Fluxo de caixa até o fim de ${label(cur)}
       </h2>
@@ -2062,7 +2107,7 @@ function render() {
 
     <!-- CATEGORIAS -->
 
-    <div class="card">
+    <div class="card" data-s="resumo">
       <h2>
         Onde estamos gastando mais
       </h2>
@@ -2073,7 +2118,7 @@ function render() {
 
     <!-- RESUMO -->
 
-    <div class="card">
+    <div class="card" data-s="resumo">
       <h2>
         Resumo de ${label(cur)}
       </h2>
@@ -2113,7 +2158,7 @@ function render() {
 
     <!-- ECONOMIA -->
 
-    <div class="card">
+    <div class="card" data-s="resumo">
       <h2>
         Resultado dos últimos meses
       </h2>
@@ -2152,7 +2197,7 @@ function render() {
 
     <!-- LANÇAMENTOS -->
 
-    <div class="card">
+    <div class="card" data-s="mes">
       <h2>
         Lançamentos de ${label(cur)}
       </h2>
@@ -2313,13 +2358,29 @@ function render() {
     </div>
 
 
-    ${legacy.tx.length ? `<div class="card"><h2>📦 Dados só neste aparelho</h2>
+    ${legacy.tx.length ? `<div class="card" data-s="ajustes"><h2>📦 Dados só neste aparelho</h2>
       <p class="note">Achei ${legacy.tx.length} lançamentos da versão antiga, salvos apenas neste navegador. Envie para o banco para aparecerem nos dois celulares.</p>
       <div class="row"><button id="lgs">Enviar para o banco</button><button class="g" id="lgd">Descartar</button></div></div>` : ""}
 
+    <!-- TEMA -->
+
+    <div class="card" data-s="ajustes">
+      <h2>🎨 Tema</h2>
+
+      <div class="themes">
+        ${THEMES.map(([k, n, g]) => `
+          <button class="th ${themeNow() === k ? "on" : ""}" data-th="${k}">
+            <i style="background:${g}"></i>${n}
+          </button>
+        `).join("")}
+      </div>
+
+      <p class="note">O tema fica salvo só neste aparelho.</p>
+    </div>
+
     <!-- BACKUP -->
 
-    <div class="card">
+    <div class="card" data-s="ajustes">
       <h2>
         Backup
       </h2>
@@ -2350,7 +2411,7 @@ function render() {
 
     <!-- CONTROLE -->
 
-    <div class="card">
+    <div class="card" data-s="ajustes">
       <h2>👥 ${esc(window.controleAtual?.nome || "Nosso controle")}</h2>
 
       <p class="note">Código para convidar outra pessoa:</p>
@@ -2394,6 +2455,10 @@ function render() {
   
 
   bindTabs();
+
+  document.querySelectorAll("[data-th]").forEach(b => {
+    b.onclick = () => setTheme(b.dataset.th);
+  });
 
   /* ---------- Trazer pendentes do mês anterior ---------- */
 
