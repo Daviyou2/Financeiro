@@ -882,7 +882,17 @@ const themeNow = () => {
   try { return localStorage.getItem("fin_theme") || "auto"; } catch { return "auto"; }
 };
 
-const applyTheme = t => { document.documentElement.dataset.theme = t; };
+const THEME_BAR = { claro: "#f6f7f9", escuro: "#111418", cinna: "#bfe3fb", sakura: "#ffe3ec" };
+
+const applyTheme = t => {
+  document.documentElement.dataset.theme = t;
+
+  /* cor da barra do celular acompanha o tema */
+  const m = document.querySelector('meta[name="theme-color"]');
+  const dark = window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches;
+
+  if (m) m.content = THEME_BAR[t] || (dark ? "#111418" : "#f6f7f9");
+};
 
 function setTheme(t) {
   try { localStorage.setItem("fin_theme", t); } catch {}
