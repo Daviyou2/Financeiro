@@ -688,12 +688,12 @@ function flow(m) {
 
   let bal = balNow();
 
-  const rows = tx
+  const rows = fundirFaturas(tx
     .filter(t =>
       monthOf(t) === m &&
       (!t.done || effDate(t) > td)
     )
-    .concat(carried(m))
+    .concat(carried(m)))
     .sort((a, b) =>
       a.date.localeCompare(b.date)
     )
@@ -882,17 +882,7 @@ const themeNow = () => {
   try { return localStorage.getItem("fin_theme") || "auto"; } catch { return "auto"; }
 };
 
-const THEME_BAR = { claro: "#f6f7f9", escuro: "#111418", cinna: "#bfe3fb", sakura: "#ffe3ec" };
-
-const applyTheme = t => {
-  document.documentElement.dataset.theme = t;
-
-  /* cor da barra do celular acompanha o tema */
-  const m = document.querySelector('meta[name="theme-color"]');
-  const dark = window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches;
-
-  if (m) m.content = THEME_BAR[t] || (dark ? "#111418" : "#f6f7f9");
-};
+const applyTheme = t => { document.documentElement.dataset.theme = t; };
 
 function setTheme(t) {
   try { localStorage.setItem("fin_theme", t); } catch {}
@@ -1080,6 +1070,251 @@ async function excluirParcelamento(rid) {
   toast("🗑️ Parcelas pendentes de " + c.desc + " apagadas");
 }
 
+
+
+/* ---------- Faturas de cartão ----------
+   Fatura = parcelas de um mesmo cartão que caem no mesmo mês.
+   Aparece como UMA linha (no fluxo, nos lançamentos e na aba Cartões),
+   com o valor que ainda falta pagar. Tocando, abre só os itens dela. */
+
+const cgOpen = new Set();
+
+const cartaoDe = t => (compraDe(t) && compraDe(t).cartao) || "";
+
+const itensFatura = (mes, cartao) =>
+  tx
+    .filter(t => compraDe(t) && monthOf(t) === mes && cartaoDe(t) === cartao)
+    .sort((a, b) => a.date.localeCompare(b.date) || a.recurrenceIndex - b.recurrenceIndex);
+
+/* Usado no fluxo: troca as parcelas de cada cartão/mês por uma linha só. */
+function fundirFaturas(list) {
+  const out = [];
+  const g = {};
+
+  list.forEach(t => {
+    if (!compraDe(t)) {
+      out.push(t);
+      return;
+    }
+
+    const key = monthOf(t) + "|" + cartaoDe(t);
+    (g[key] = g[key] || []).push(t);
+  });
+
+  Object.keys(g).forEach(key => {
+    const its = g[key];
+
+    out.push({
+      fatura: true,
+      id: "fat:" + key,
+      mes: monthOf(its[0]),
+      cartao: cartaoDe(its[0]),
+      type: "out",
+      value: cents(sum(its)),
+      date: its.map(t => t.date).sort()[0]
+    });
+  });
+
+  return out;
+}
+
+function faturaHtml(mes, cartao, pref, extra) {
+  const itens = itensFatura(mes, cartao);
+
+  if (!itens.length) return "";
+
+  const x = extra || {};
+  const td = today();
+  const pend = itens.filter(t => !t.done);
+  const restante = cents(sum(pend));
+  const total = cents(sum(itens));
+  const valor = x.valor != null ? x.valor : restante;
+  const key = mes + "|" + cartao;
+  const dkey = pref + "|" + key;
+  const atrasada = pend.some(t => t.date < td);
+  const venc = pend.length ? pend[0].date : itens[itens.length - 1].date;
+  const nome = cartao || "sem cartão";
+
+  const smalls = [];
+
+  if (pend.length && restante < total) smalls.push("de " + R(total));
+  if (x.bal != null) smalls.push("saldo " + R(x.bal));
+
+  return `
+    <details class="cg" data-cg="${esc(dkey)}" ${cgOpen.has(dkey) ? "open" : ""}>
+      <summary class="li ${pend.length ? "pend" : ""}">
+        <div>
+          💳 Fatura ${esc(nome)}
+          ${mes !== cur ? `<span class="tag">${label(mes)}</span>` : ""}
+          ${pend.length
+            ? `<span class="tag ${atrasada ? "late" : ""}">vence ${dm(venc)}</span>`
+            : '<span class="tag">✓ paga</span>'}
+          <br>
+          <small>
+            ${itens.length} ${itens.length > 1 ? "itens" : "item"}
+            ${pend.length && pend.length < itens.length ? " · " + pend.length + " pendente" + (pend.length > 1 ? "s" : "") : ""}
+            · toque para ver os itens
+          </small>
+        </div>
+
+        <div class="row">
+          <div style="text-align:right">
+            <b class="out">-${R(valor)}</b>
+            ${smalls.length ? "<br><small>" + smalls.join(" · ") + "</small>" : ""}
+          </div>
+          <span class="chev">▸</span>
+        </div>
+
+        ${pend.length ? `
+          <div class="fat-act">
+            <button data-fp="${esc(key)}">✓ Fatura paga inteira</button>
+          </div>
+        ` : ""}
+      </summary>
+
+      <div class="cg-body">
+        ${itens.map(t => `
+          <div class="li ${t.done ? "" : "pend"}">
+            <div>
+              ${esc(t.desc || "Compra")}
+              ${parcTag(t)}
+              ${t.done ? '<span class="tag">✓ pago</span>' : `<span class="tag ${t.date < td ? "late" : ""}">pendente</span>`}
+              <br>
+              <small>
+                vence ${dm(t.date)}
+                · ${esc(t.cat || "Outros")}
+                · ${esc(t.by || "—")}
+              </small>
+            </div>
+
+            <div class="row">
+              <b class="out">-${R(t.value)}</b>
+              ${cardPayBtn(t)}<button data-cdp="${esc(t.id)}" title="Excluir só esta parcela">🗑️</button>
+            </div>
+          </div>
+        `).join("")}
+      </div>
+    </details>
+  `;
+}
+
+const cartoesDoMes = list =>
+  [...new Set(list.filter(t => compraDe(t)).map(cartaoDe))].sort();
+
+/* Lançamentos do mês */
+const gruposCartao = list =>
+  cartoesDoMes(list).map(c => faturaHtml(cur, c, "l")).join("");
+
+/* Aba Cartões */
+const faturasMes = (mes, pref) => {
+  const cs = cartoesDoMes(parcelasDoMes(mes));
+
+  return cs.length
+    ? cs.map(c => faturaHtml(mes, c, pref)).join("")
+    : `<p class="note">Nenhuma fatura de cartão em ${label(mes)}.</p>`;
+};
+
+async function pagarFatura(key) {
+  const i = key.indexOf("|");
+  const mes = key.slice(0, i);
+  const cartao = key.slice(i + 1);
+  const itens = itensFatura(mes, cartao).filter(t => !t.done);
+
+  if (!itens.length) return;
+
+  const total = cents(sum(itens));
+  const nome = cartao || "sem cartão";
+
+  const ok = confirm(
+    `Marcar a fatura ${nome} de ${label(mes)} (${R(total)}) como paga inteira?\n\n` +
+    `${itens.length} ${itens.length > 1 ? "itens serão marcados" : "item será marcado"} como pago.`
+  );
+
+  if (!ok) return;
+
+  const ids = itens.map(t => t.id);
+
+  itens.forEach(t => {
+    t.done = true;
+    t.doneAt = today();
+  });
+
+  try {
+    await Promise.all(itens.map(t => atualizarStatusSupabase(t)));
+  } catch (erro) {
+    console.error("Erro ao pagar fatura:", erro);
+
+    await carregarLancamentosSupabase();
+    render();
+
+    alert("Não foi possível sincronizar o pagamento da fatura.\n\n" + (erro?.message || ""));
+    return;
+  }
+
+  save();
+  render();
+
+  toast(
+    "✓ Fatura " + nome + " paga — saldo agora " + R(balNow()),
+    "Desfazer",
+    () => desfazerFatura(ids)
+  );
+}
+
+async function desfazerFatura(ids) {
+  const itens = ids.map(id => tx.find(x => x.id === id)).filter(Boolean);
+
+  itens.forEach(t => {
+    t.done = false;
+    t.doneAt = null;
+  });
+
+  try {
+    await Promise.all(itens.map(t => atualizarStatusSupabase(t)));
+  } catch (erro) {
+    console.error(erro);
+
+    await carregarLancamentosSupabase();
+    render();
+
+    alert("Não foi possível desfazer no banco.\n\n" + (erro?.message || ""));
+    return;
+  }
+
+  save();
+  render();
+
+  toast("↩️ Fatura reaberta");
+}
+
+function bindCartaoGrupos() {
+  document.querySelectorAll("[data-fp]").forEach(b => {
+    b.onclick = ev => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      pagarFatura(b.dataset.fp);
+    };
+  });
+
+  document.querySelectorAll("details.cg").forEach(d => {
+    d.ontoggle = () => {
+      if (d.open) cgOpen.add(d.dataset.cg);
+      else cgOpen.delete(d.dataset.cg);
+    };
+  });
+
+  document.querySelectorAll("[data-cok]").forEach(b => {
+    b.onclick = () => pagarParcela(b.dataset.cok);
+  });
+
+  document.querySelectorAll("[data-crv]").forEach(b => {
+    b.onclick = () => reverter(b.dataset.crv);
+  });
+
+  document.querySelectorAll("[data-cdp]").forEach(b => {
+    b.onclick = () => excluirParcela(b.dataset.cdp);
+  });
+}
 
 /* ---------- Tela ---------- */
 
@@ -1311,40 +1546,12 @@ function renderCartoes() {
     ${form}
 
     <div class="card">
-      <h2>Parcelas de ${label(cur)}</h2>
+      <h2>Faturas de ${label(cur)}</h2>
 
-      ${lista.length ? lista.map(t => {
-        const c = compraDe(t);
-
-        return `
-          <div class="li ${t.done ? "" : "pend"}">
-            <div>
-              💳 ${esc(t.desc || "Compra")}
-              ${parcTag(t)}
-              ${c.cartao ? `<span class="tag">${esc(c.cartao)}</span>` : ""}
-              ${t.done
-                ? '<span class="tag">✓ pago</span>'
-                : `<span class="tag ${t.date < td ? "late" : ""}">pendente</span>`}
-              <br>
-              <small>
-                vence ${dm(t.date)}
-                · ${esc(t.cat || "Outros")}
-                · ${esc(t.by || "—")}
-              </small>
-            </div>
-
-            <div class="row">
-              <b class="out">-${R(t.value)}</b>
-              ${cardPayBtn(t)}<button data-cdp="${esc(t.id)}" title="Excluir só esta parcela">🗑️</button>
-            </div>
-          </div>
-        `;
-      }).join("") : `
-        <p class="note">Nenhuma parcela de cartão em ${label(cur)}.</p>
-      `}
+      ${faturasMes(cur, "c")}
 
       <p class="note">
-        🗑️ apaga somente a parcela deste mês; o restante do parcelamento continua.
+        Toque numa fatura para ver os itens. 🗑️ apaga só a parcela daquele mês; o restante do parcelamento continua.
       </p>
     </div>
 
@@ -1381,6 +1588,7 @@ function renderCartoes() {
   };
 
   bindTabs();
+  bindCartaoGrupos();
 
   if ($("#nw")) {
     $("#nw").onclick = () => {
@@ -2037,7 +2245,7 @@ function render() {
 
 
       ${
-        F.rows.map(({t, bal}) => `
+        F.rows.map(({t, bal}) => t.fatura ? faturaHtml(t.mes, t.cartao, "f", {valor: t.value, bal}) : `
           <div class="li">
 
             <div>
@@ -2216,7 +2424,8 @@ function render() {
 
       ${
         M.a.length
-          ? [...M.a]
+          ? gruposCartao(M.a) + [...M.a]
+              .filter(t => !compraDe(t))
               .sort(
                 (x, y) =>
                   y.date.localeCompare(x.date)
@@ -2467,6 +2676,7 @@ function render() {
   
 
   bindTabs();
+  bindCartaoGrupos();
 
   document.querySelectorAll("[data-th]").forEach(b => {
     b.onclick = () => setTheme(b.dataset.th);
